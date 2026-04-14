@@ -118,3 +118,46 @@ def build_prompt(data: dict, language: str) -> str:
         ]
 
     return '\n'.join(lines)
+
+
+class SimHubPoller(threading.Thread):
+    """Thread 1: polls SimHub REST API every POLL_SEC seconds.
+
+    Stores extracted telemetry in the global `latest_data` dict.
+    Sets the `data_received` event on first successful poll.
+    Errors are printed as warnings — the thread never crashes.
+    """
+
+    def __init__(self):
+        super().__init__(daemon=True, name='SimHubPoller')
+        self._stop_event = threading.Event()
+
+    def stop(self):
+        """Signal the thread to stop after its current sleep."""
+        self._stop_event.set()
+
+    def run(self):
+        global latest_data
+        while not self._stop_event.is_set():
+            try:
+                resp = requests.get(SIMHUB_URL, timeout=5)
+                resp.raise_for_status()
+                raw = resp.json()
+
+                extracted = {field: raw.get(field) for field in SIMHUB_FIELDS}
+
+                with data_lock:
+                    latest_data = extracted
+
+                data_received.set()
+
+            except requests.exceptions.ConnectionError:
+                print(f'[WARNING] SimHub not available — retrying in {POLL_SEC}s')
+            except requests.exceptions.Timeout:
+                print(f'[WARNING] SimHub request timed out — retrying in {POLL_SEC}s')
+            except requests.exceptions.RequestException as e:
+                print(f'[WARNING] SimHub error: {e}')
+            except Exception as e:
+                print(f'[WARNING] Unexpected poller error: {e}')
+
+            self._stop_event.wait(POLL_SEC)
