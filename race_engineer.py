@@ -54,3 +54,21 @@ SIMHUB_FIELDS = [
     'EngineOilTemp', 'EngineWaterTemp', 'BatteryCharge',
     'Flag_Yellow', 'IsInPit', 'ABSActive', 'TCActive', 'TyresCompound',
 ]
+
+# ============================================================
+# Shared state — Thread 1 writes, Thread 2 reads
+# ============================================================
+latest_data: dict = {}
+data_lock = threading.Lock()
+data_received = threading.Event()  # set when first SimHub poll succeeds
+
+
+def get_field(data: dict, key: str, default: str = 'N/A') -> str:
+    """Safely extract a field from SimHub data as a string.
+
+    Returns `default` if the key is missing or the value is None.
+    """
+    val = data.get(key)
+    if val is None:
+        return default
+    return str(val)
