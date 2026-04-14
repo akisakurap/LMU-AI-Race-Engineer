@@ -161,3 +161,25 @@ class SimHubPoller(threading.Thread):
                 print(f'[WARNING] Unexpected poller error: {e}')
 
             self._stop_event.wait(POLL_SEC)
+
+
+def call_engineer(user_prompt: str) -> str:
+    """Send telemetry prompt to LM Studio and return the response text.
+
+    Uses the OpenAI-compatible API provided by LM Studio.
+    Raises exceptions on connection failure or timeout — caller handles them.
+    """
+    client = OpenAI(base_url=LM_STUDIO_URL, api_key='lm-studio')
+
+    response = client.chat.completions.create(
+        model=MODEL_NAME,
+        messages=[
+            {'role': 'system', 'content': SYSTEM_PROMPTS[LANGUAGE]},
+            {'role': 'user', 'content': user_prompt},
+        ],
+        temperature=0.7,
+        max_tokens=200,
+        timeout=LLM_TIMEOUT,
+    )
+
+    return response.choices[0].message.content.strip()
