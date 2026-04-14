@@ -183,3 +183,67 @@ def call_engineer(user_prompt: str) -> str:
     )
 
     return response.choices[0].message.content.strip()
+
+
+def engineer_loop():
+    """Thread 2 (main thread): every INTERVAL_SEC, read telemetry and call the LLM.
+
+    Waits for the first SimHub poll to succeed before making any LLM calls.
+    Errors from LM Studio are printed as warnings — the loop never crashes.
+    Stop with Ctrl+C.
+    """
+    print('=' * 60)
+    print('  Race Engineer — LMU + SimHub + LM Studio')
+    print(f'  Language: {LANGUAGE} | Model: {MODEL_NAME}')
+    print(f'  SimHub poll: every {POLL_SEC}s | LLM call: every {INTERVAL_SEC}s')
+    print('  Press Ctrl+C to stop.')
+    print('=' * 60)
+    print('[INFO] Waiting for first SimHub data...')
+
+    while True:
+        time.sleep(INTERVAL_SEC)
+
+        if not data_received.is_set():
+            print('[INFO] No SimHub data yet — still waiting...')
+            continue
+
+        with data_lock:
+            current_data = dict(latest_data)
+
+        prompt = build_prompt(current_data, LANGUAGE)
+
+        speed = current_data.get('SpeedKmh', 'N/A')
+        lap   = current_data.get('CurrentLap', 'N/A')
+        fuel  = current_data.get('Fuel', 'N/A')
+        ts    = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+        print('=' * 60)
+        print(f'[{ts}] Lap {lap} | {speed} km/h | Fuel: {fuel}L')
+        print('-' * 60)
+
+        try:
+            answer = call_engineer(prompt)
+            print(f'[ENGINEER] {answer}')
+        except Exception as e:
+            err = str(e).lower()
+            if 'connection' in err or 'refused' in err or 'connect' in err:
+                print('[WARNING] LM Studio not available — skipping this cycle')
+            elif 'timeout' in err or 'timed out' in err:
+                print('[WARNING] LLM timed out — skipping this cycle')
+            else:
+                print(f'[WARNING] LLM error: {e}')
+
+        print('=' * 60)
+
+
+if __name__ == '__main__':
+    poller = SimHubPoller()
+    poller.start()
+
+    try:
+        engineer_loop()
+    except KeyboardInterrupt:
+        print('\n[INFO] Shutting down...')
+        poller.stop()
+        poller.join(timeout=POLL_SEC + 1)
+        print('[INFO] Race Engineer stopped. Good race!')
