@@ -72,3 +72,49 @@ def get_field(data: dict, key: str, default: str = 'N/A') -> str:
     if val is None:
         return default
     return str(val)
+
+
+def build_prompt(data: dict, language: str) -> str:
+    """Format telemetry data into an LLM user prompt string.
+
+    Produces a compact, multi-line summary of key telemetry values.
+    Missing fields appear as 'N/A'.
+    """
+    g = lambda key: get_field(data, key)
+
+    if language == 'ja':
+        lines = [
+            f"速度: {g('SpeedKmh')} km/h | ラップ: {g('CurrentLap')} | 燃料: {g('Fuel')}L",
+            f"タイヤ摩耗: FL {g('TyrewearFrontLeft')}% / FR {g('TyrewearFrontRight')}%"
+            f" / RL {g('TyrewearRearLeft')}% / RR {g('TyrewearRearRight')}%",
+            f"タイヤ温度: FL {g('TyreTemperatureFrontLeft')}°C / FR {g('TyreTemperatureFrontRight')}°C"
+            f" / RL {g('TyreTemperatureRearLeft')}°C / RR {g('TyreTemperatureRearRight')}°C",
+            f"タイヤ空気圧: FL {g('TyrePressureFrontLeft')} / FR {g('TyrePressureFrontRight')}"
+            f" / RL {g('TyrePressureRearLeft')} / RR {g('TyrePressureRearRight')}",
+            f"エンジン油温: {g('EngineOilTemp')}°C | 冷却水温: {g('EngineWaterTemp')}°C"
+            f" | SOC: {g('BatteryCharge')}%",
+            f"前車との差: +{g('GapFront')}s | 後車との差: -{g('GapBehind')}s",
+            f"前ラップ: {g('LastLapTime')} | ベスト: {g('BestLapTime')} | 現在: {g('CurrentLapTime')}",
+            f"イエローフラグ: {g('Flag_Yellow')} | ピット中: {g('IsInPit')}"
+            f" | ABS: {g('ABSActive')} | TC: {g('TCActive')}",
+            f"タイヤコンパウンド: {g('TyresCompound')}",
+        ]
+    else:
+        lines = [
+            f"Speed: {g('SpeedKmh')} km/h | Lap: {g('CurrentLap')} | Fuel: {g('Fuel')}L",
+            f"Tyre wear: FL {g('TyrewearFrontLeft')}% / FR {g('TyrewearFrontRight')}%"
+            f" / RL {g('TyrewearRearLeft')}% / RR {g('TyrewearRearRight')}%",
+            f"Tyre temp: FL {g('TyreTemperatureFrontLeft')}°C / FR {g('TyreTemperatureFrontRight')}°C"
+            f" / RL {g('TyreTemperatureRearLeft')}°C / RR {g('TyreTemperatureRearRight')}°C",
+            f"Tyre pressure: FL {g('TyrePressureFrontLeft')} / FR {g('TyrePressureFrontRight')}"
+            f" / RL {g('TyrePressureRearLeft')} / RR {g('TyrePressureRearRight')}",
+            f"Engine oil: {g('EngineOilTemp')}°C | Coolant: {g('EngineWaterTemp')}°C"
+            f" | SoC: {g('BatteryCharge')}%",
+            f"Gap ahead: +{g('GapFront')}s | Gap behind: -{g('GapBehind')}s",
+            f"Last lap: {g('LastLapTime')} | Best: {g('BestLapTime')} | Current: {g('CurrentLapTime')}",
+            f"Yellow: {g('Flag_Yellow')} | In pit: {g('IsInPit')}"
+            f" | ABS: {g('ABSActive')} | TC: {g('TCActive')}",
+            f"Compound: {g('TyresCompound')}",
+        ]
+
+    return '\n'.join(lines)
