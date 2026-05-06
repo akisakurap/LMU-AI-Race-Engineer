@@ -14,7 +14,6 @@ from rf2_structs import (
     RF2ScoringBuffer,
     vec3_speed_kmh,
     tire_temp_mid_celsius,
-    kelvin_to_celsius,
 )
 
 TELEMETRY_MAP = '$rFactor2SMMP_Telemetry$'
@@ -101,7 +100,7 @@ class RF2Reader:
 
         # テレメトリ側でも mID で突き合わせ
         player_t = next(
-            (tel_buf.mVehicles[i] for i in range(n)
+            (tel_buf.mVehicles[i] for i in range(128)
              if tel_buf.mVehicles[i].mID == player_s.mID),
             None,
         )
@@ -109,7 +108,7 @@ class RF2Reader:
             return {}
 
         # 後続車（mPlace + 1）を探してギャップを取得
-        behind_gap = 'N/A'
+        behind_gap = None
         for i in range(n):
             v = scor_buf.mVehicles[i]
             if v.mPlace == player_s.mPlace + 1:
