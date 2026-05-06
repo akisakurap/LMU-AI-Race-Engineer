@@ -1,74 +1,111 @@
-# Tests for race_engineer.py pure functions
-import sys
-import os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+"""tests/test_race_engineer.py"""
 
-from race_engineer import get_field
+import pytest
+from race_engineer import build_prompt, _session_name, _tyre_str
 
 
-class TestGetField:
-    def test_returns_string_value_when_present(self):
-        assert get_field({'SpeedKmh': 245}, 'SpeedKmh') == '245'
+# -----------------------------------------------------------------------
+# _session_name
+# -----------------------------------------------------------------------
 
-    def test_returns_default_when_key_missing(self):
-        assert get_field({}, 'SpeedKmh') == 'N/A'
-
-    def test_returns_default_when_value_is_none(self):
-        assert get_field({'SpeedKmh': None}, 'SpeedKmh') == 'N/A'
-
-    def test_custom_default(self):
-        assert get_field({}, 'SpeedKmh', default='0') == '0'
-
-    def test_converts_float_to_string(self):
-        assert get_field({'Fuel': 42.3}, 'Fuel') == '42.3'
-
-    def test_converts_bool_to_string(self):
-        assert get_field({'IsInPit': False}, 'IsInPit') == 'False'
+def test_session_name_race():
+    assert _session_name(10) == 'レース'
+    assert _session_name(13) == 'レース'
 
 
-from race_engineer import build_prompt
+def test_session_name_qualifying():
+    assert _session_name(5) == '予選'
 
-SAMPLE_DATA = {
-    'SpeedKmh': 245, 'Rpms': 7800, 'Gear': 6, 'CurrentLap': 12,
-    'CurrentLapTime': '3:49.123', 'BestLapTime': '3:47.903', 'LastLapTime': '3:48.521',
-    'Fuel': 42.3, 'GapFront': 1.842, 'GapBehind': 0.531,
-    'TyrewearFrontLeft': 23, 'TyrewearFrontRight': 25,
-    'TyrewearRearLeft': 18, 'TyrewearRearRight': 20,
-    'TyreTemperatureFrontLeft': 92, 'TyreTemperatureFrontRight': 94,
-    'TyreTemperatureRearLeft': 88, 'TyreTemperatureRearRight': 87,
-    'TyrePressureFrontLeft': 27.2, 'TyrePressureFrontRight': 27.5,
-    'TyrePressureRearLeft': 26.8, 'TyrePressureRearRight': 26.9,
-    'EngineOilTemp': 105, 'EngineWaterTemp': 88, 'BatteryCharge': 72,
-    'Flag_Yellow': False, 'IsInPit': False, 'ABSActive': False,
-    'TCActive': False, 'TyresCompound': 'Medium',
+
+def test_session_name_practice():
+    assert _session_name(1) == '練習'
+
+
+# -----------------------------------------------------------------------
+# build_prompt — 日本語
+# -----------------------------------------------------------------------
+
+FULL_DATA = {
+    'SpeedKmh': 230.5, 'Gear': 5, 'EngineRPM': 7200,
+    'Fuel': 38.5, 'FuelCapacity': 60.0,
+    'WaterTemp': 85.0, 'OilTemp': 110.0,
+    'ERSBattery': 72.0, 'ERSMotorTemp': 65.0,
+    'TyreWear': [85.0, 84.5, 82.0, 81.5],
+    'TyreTemp': [95.0, 96.0, 92.0, 91.5],
+    'TyrePressure': [180.0, 181.0, 178.0, 179.0],
+    'FrontCompound': 'Soft', 'RearCompound': 'Soft',
+    'Position': 3, 'NumVehicles': 20,
+    'TotalLaps': 12, 'TimeIntoLap': 45.2,
+    'LastLapTime': 105.321, 'BestLapTime': 104.876,
+    'EstLapTime': 105.1,
+    'CurSector1': 32.1, 'CurSector2': 68.4,
+    'LastSector1': 31.9, 'LastSector2': 67.8,
+    'BestSector1': 31.5, 'BestSector2': 67.2,
+    'GapToFront': 1.234, 'GapToBehind': 0.876, 'GapToLeader': 8.5,
+    'TrackName': 'Le Mans', 'Session': 10,
+    'TimeRemaining': 3661, 'LapsRemaining': None,
+    'YellowFlag': 0, 'SectorFlags': [0, 0, 0],
+    'GamePhase': 5,
+    'InPits': False, 'PitState': 0, 'NumPitstops': 1, 'NumPenalties': 0,
+    'BlueFlag': False, 'VehicleClass': 'GTE',
+    'Raining': 0.0, 'AmbientTemp': 22.0, 'TrackTemp': 35.0, 'WindSpeed': 2.5,
+    'DamageSummary': 'なし', 'PartDetached': False, 'Overheating': False,
 }
 
 
-class TestBuildPrompt:
-    def test_ja_contains_speed(self):
-        assert '245 km/h' in build_prompt(SAMPLE_DATA, 'ja')
+def test_build_prompt_ja_contains_gap():
+    prompt = build_prompt(FULL_DATA, 'ja')
+    assert 'ギャップ' in prompt
+    assert '1.234' in prompt
+    assert '0.876' in prompt
 
-    def test_ja_contains_lap(self):
-        assert 'ラップ: 12' in build_prompt(SAMPLE_DATA, 'ja')
 
-    def test_ja_contains_fuel(self):
-        assert '42.3L' in build_prompt(SAMPLE_DATA, 'ja')
+def test_build_prompt_ja_contains_weather():
+    prompt = build_prompt(FULL_DATA, 'ja')
+    assert '天候' in prompt
+    assert '22.0' in prompt
+    assert '35.0' in prompt
 
-    def test_ja_contains_tyre_wear(self):
-        assert 'FL 23%' in build_prompt(SAMPLE_DATA, 'ja')
 
-    def test_en_contains_speed(self):
-        assert '245 km/h' in build_prompt(SAMPLE_DATA, 'en')
+def test_build_prompt_ja_contains_damage_none():
+    prompt = build_prompt(FULL_DATA, 'ja')
+    assert 'ダメージ' in prompt
+    assert 'なし' in prompt
 
-    def test_en_contains_lap(self):
-        assert 'Lap: 12' in build_prompt(SAMPLE_DATA, 'en')
 
-    def test_en_contains_fuel(self):
-        assert '42.3L' in build_prompt(SAMPLE_DATA, 'en')
+def test_build_prompt_ja_damage_with_issue():
+    data = dict(FULL_DATA, DamageSummary='あり（最大 3）')
+    prompt = build_prompt(data, 'ja')
+    assert 'あり（最大 3）' in prompt
 
-    def test_missing_fields_show_na(self):
-        prompt = build_prompt({}, 'ja')
-        assert 'N/A' in prompt
 
-    def test_ja_and_en_differ(self):
-        assert build_prompt(SAMPLE_DATA, 'ja') != build_prompt(SAMPLE_DATA, 'en')
+def test_build_prompt_ja_remaining_time():
+    prompt = build_prompt(FULL_DATA, 'ja')
+    assert '61:01' in prompt    # 3661s = 61分01秒
+
+
+def test_build_prompt_en_contains_gap():
+    prompt = build_prompt(FULL_DATA, 'en')
+    assert 'Gap' in prompt
+    assert '1.234' in prompt
+
+
+def test_build_prompt_no_data_does_not_crash():
+    prompt = build_prompt({}, 'ja')
+    assert 'N/A' in prompt
+
+
+# -----------------------------------------------------------------------
+# _tyre_str
+# -----------------------------------------------------------------------
+
+def test_tyre_str_normal():
+    data = {'TyreWear': [85.0, 84.5, 82.0, 81.5]}
+    result = _tyre_str(data, 'TyreWear')
+    assert 'FL 85.0' in result
+    assert 'RR 81.5' in result
+
+
+def test_tyre_str_missing():
+    result = _tyre_str({}, 'TyreWear')
+    assert result == 'N/A'
