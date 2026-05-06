@@ -139,6 +139,34 @@ Press `Ctrl+C` to stop.
 
 ---
 
+## Prompt sent to the LLM
+
+The following text is sent to the LLM every 10 seconds (example with real race data):
+
+```
+Track: Le Mans | Session: Race | Class: GTE
+Speed: 245.3 km/h | Gear: 6 | RPM: 7200
+Position: P3/20 | Lap: 12 | Remaining: 61:01 / 8 laps left
+Gap: Front 1.234s / Behind 0.876s / Leader 8.5s
+Fuel: 38.5L / 60.0L
+Tyre wear: FL 85.0 / FR 84.5 / RL 82.0 / RR 81.5%
+Tyre temp: FL 95.0 / FR 96.0 / RL 92.0 / RR 91.5°C
+Tyre pressure: FL 180.0 / FR 181.0 / RL 178.0 / RR 179.0kPa
+Tyre compound: F Soft / R Soft
+Water: 85.0°C | Oil: 110.0°C | ERS: 72.0% | ERS temp: 65.0°C
+Last lap: 105.321s | Best: 104.876s | Est: 105.1s
+Sectors (current): S1 32.1s / S2 68.4s
+Weather: Rain 0.0 | Air 22.0°C | Track 35.0°C | Wind 2.5m/s
+Damage: none
+Pit stops: 1 | Penalties: 0 | Blue flag: False
+```
+
+> **This prompt is a work in progress.**  
+> Have ideas? "This field is useless", "I want X data too", "Format it differently" — all feedback is welcome.  
+> Feel free to open an [Issue](https://github.com/akisakurap/LMU-AI-Race-Engineer/issues) and share your thoughts.
+
+---
+
 ## Screenshot
 
 <!-- Add screenshot here -->
