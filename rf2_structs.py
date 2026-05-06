@@ -227,7 +227,8 @@ class RF2ScoringInfo(ctypes.Structure):
         ('_pad_si0',            ctypes.c_uint8 * 4),
         ('mCurrentET',          ctypes.c_double),
         ('mEndET',              ctypes.c_double),
-        ('mMaxLaps',            ctypes.c_double),
+        ('mMaxLaps',            ctypes.c_int32),
+        ('_pad_maxlaps',        ctypes.c_uint8 * 4),
         ('mLapDist',            ctypes.c_double),
         ('_ptr1',               ctypes.c_uint8 * 8),   # MM_NEW pointer (skip)
         ('mNumVehicles',        ctypes.c_int32),
