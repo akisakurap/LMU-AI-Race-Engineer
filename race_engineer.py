@@ -1,32 +1,30 @@
 """
 race_engineer.py
 ================
-Live race engineer assistant for Le Mans Ultimate via SimHub + LM Studio.
+Live race engineer assistant for Le Mans Ultimate via rF2 SharedMemory + LM Studio.
 
 Configuration variables are at the top of this file.
 """
 
-import threading
 import time
 from datetime import datetime
 
-import requests
 from openai import OpenAI
 
+from rf2_reader import RF2Reader
+
 # ============================================================
-# Configuration — edit these to match your setup
+# Configuration
 # ============================================================
-LANGUAGE = 'ja'                              # 'ja' (Japanese) or 'en' (English)
-PERSONA  = 'default'                         # 'default' or 'girl'
-MODEL_NAME = 'google/gemma-4-e2b'            # LM Studio model name (must match exactly)
-INTERVAL_SEC = 10                            # Seconds between LLM calls
-POLL_SEC = 2                                 # Seconds between SimHub polls
-LLM_TIMEOUT = 30                             # Seconds before LLM call is abandoned
-SIMHUB_URL = 'http://localhost:8888/api/getgamedata'
+LANGUAGE     = 'ja'
+PERSONA      = 'default'
+MODEL_NAME   = 'google/gemma-4-e2b'
+INTERVAL_SEC = 10
+LLM_TIMEOUT  = 30
 LM_STUDIO_URL = 'http://localhost:1234/v1'
 
 # ============================================================
-# System prompts (selected by PERSONA + LANGUAGE)
+# System prompts
 # ============================================================
 SYSTEM_PROMPTS = {
     'default': {
@@ -60,191 +58,138 @@ SYSTEM_PROMPTS = {
     },
 }
 
-# SimHub REST API field names to extract (from NewData object)
-SIMHUB_FIELDS = [
-    'SpeedKmh', 'Rpms', 'Gear', 'CurrentLap',
-    'CurrentLapTime', 'BestLapTime', 'LastLapTime',
-    'Fuel', 'Position', 'OpponentsCount', 'BestSplitDelta',
-    'TyreWearFrontLeft', 'TyreWearFrontRight', 'TyreWearRearLeft', 'TyreWearRearRight',
-    'TyresWearAvg',
-    'TyreTemperatureFrontLeft', 'TyreTemperatureFrontRight',
-    'TyreTemperatureRearLeft', 'TyreTemperatureRearRight',
-    'TyrePressureFrontLeft', 'TyrePressureFrontRight',
-    'TyrePressureRearLeft', 'TyrePressureRearRight',
-    'OilTemperature', 'WaterTemperature', 'ERSPercent',
-    'Flag_Yellow', 'IsInPit', 'ABSActive', 'TCActive', 'CarClass',
-]
 
-# ============================================================
-# Shared state — Thread 1 writes, Thread 2 reads
-# ============================================================
-latest_data: dict = {}
-data_lock = threading.Lock()
-data_received = threading.Event()  # set when first SimHub poll succeeds
-
-
-def get_field(data: dict, key: str, default: str = 'N/A') -> str:
-    """Safely extract a field from SimHub data as a string.
-
-    Returns `default` if the key is missing or the value is None.
-    """
+def _g(data: dict, key: str, default: str = 'N/A') -> str:
     val = data.get(key)
     if val is None:
         return default
     return str(val)
 
 
-def build_prompt(data: dict, language: str) -> str:
-    """Format telemetry data into an LLM user prompt string.
+def _tyre_str(data: dict, key: str, labels=('FL', 'FR', 'RL', 'RR')) -> str:
+    vals = data.get(key)
+    if not vals or len(vals) < 4:
+        return 'N/A'
+    return ' / '.join(f'{l} {v}' for l, v in zip(labels, vals))
 
-    Produces a compact, multi-line summary of key telemetry values.
-    Missing fields appear as 'N/A'.
-    """
-    g = lambda key: get_field(data, key)
+
+def _session_name(session_id: int) -> str:
+    if 10 <= session_id <= 13:
+        return 'レース'
+    if 5 <= session_id <= 8:
+        return '予選'
+    if 1 <= session_id <= 4:
+        return '練習'
+    return 'テスト'
+
+
+def build_prompt(data: dict, language: str) -> str:
+    g = lambda key, default='N/A': _g(data, key, default)
+
+    session_label = _session_name(int(g('Session', '0')))
+
+    time_rem = data.get('TimeRemaining')
+    laps_rem = data.get('LapsRemaining')
+    remaining_str = ''
+    if time_rem is not None:
+        m, s = divmod(int(time_rem), 60)
+        remaining_str += f'{m}:{s:02d}'
+    if laps_rem is not None:
+        remaining_str += f' / 残り{laps_rem}周'
+    if not remaining_str:
+        remaining_str = 'N/A'
+
+    damage_parts = []
+    if data.get('DamageSummary', 'なし') != 'なし':
+        damage_parts.append(f'車体:{g("DamageSummary")}')
+    if data.get('PartDetached'):
+        damage_parts.append('パーツ脱落')
+    if data.get('Overheating'):
+        damage_parts.append('過熱警告')
+    damage_str = ' / '.join(damage_parts) if damage_parts else 'なし'
 
     if language == 'ja':
         lines = [
-            f"速度: {g('SpeedKmh')} km/h | ラップ: {g('CurrentLap')} | 燃料: {g('Fuel')}L",
-            f"順位: P{g('Position')}/{g('OpponentsCount')} | ベストとの差: {g('BestSplitDelta')}s",
-            f"タイヤ摩耗(平均): {g('TyresWearAvg')}% | FL {g('TyreWearFrontLeft')}% / FR {g('TyreWearFrontRight')}%"
-            f" / RL {g('TyreWearRearLeft')}% / RR {g('TyreWearRearRight')}%",
-            f"タイヤ温度: FL {g('TyreTemperatureFrontLeft')}°C / FR {g('TyreTemperatureFrontRight')}°C"
-            f" / RL {g('TyreTemperatureRearLeft')}°C / RR {g('TyreTemperatureRearRight')}°C",
-            f"タイヤ空気圧: FL {g('TyrePressureFrontLeft')} / FR {g('TyrePressureFrontRight')}"
-            f" / RL {g('TyrePressureRearLeft')} / RR {g('TyrePressureRearRight')}",
-            f"エンジン油温: {g('OilTemperature')}°C | 冷却水温: {g('WaterTemperature')}°C"
-            f" | ERS: {g('ERSPercent')}%",
-            f"前ラップ: {g('LastLapTime')} | ベスト: {g('BestLapTime')} | 現在: {g('CurrentLapTime')}",
-            f"イエローフラグ: {g('Flag_Yellow')} | ピット中: {g('IsInPit')}"
-            f" | ABS: {g('ABSActive')} | TC: {g('TCActive')}",
-            f"クラス: {g('CarClass')}",
+            f"コース: {g('TrackName')} | セッション: {session_label} | クラス: {g('VehicleClass')}",
+            f"速度: {g('SpeedKmh')} km/h | ギア: {g('Gear')} | RPM: {g('EngineRPM')}",
+            f"順位: P{g('Position')}/{g('NumVehicles')} | ラップ: {g('TotalLaps')} | 残り: {remaining_str}",
+            f"ギャップ: 前 {g('GapToFront')}s / 後 {g('GapToBehind')}s / リーダー {g('GapToLeader')}s",
+            f"燃料: {g('Fuel')}L / {g('FuelCapacity')}L",
+            f"タイヤ摩耗: {_tyre_str(data, 'TyreWear')}%",
+            f"タイヤ温度: {_tyre_str(data, 'TyreTemp')}°C",
+            f"タイヤ空気圧: {_tyre_str(data, 'TyrePressure')}kPa",
+            f"タイヤ種別: F {g('FrontCompound')} / R {g('RearCompound')}",
+            f"水温: {g('WaterTemp')}°C | 油温: {g('OilTemp')}°C | ERS: {g('ERSBattery')}% | ERS温度: {g('ERSMotorTemp')}°C",
+            f"前ラップ: {g('LastLapTime')}s | ベスト: {g('BestLapTime')}s | 推定: {g('EstLapTime')}s",
+            f"セクター(現在): S1 {g('CurSector1')}s / S2 {g('CurSector2')}s",
+            f"天候: 雨 {g('Raining')} | 気温 {g('AmbientTemp')}°C | 路面 {g('TrackTemp')}°C | 風 {g('WindSpeed')}m/s",
+            f"ダメージ: {damage_str}",
+            f"ピット: {g('NumPitstops')}回 | ペナルティ: {g('NumPenalties')} | 青旗: {g('BlueFlag')}",
         ]
     else:
         lines = [
-            f"Speed: {g('SpeedKmh')} km/h | Lap: {g('CurrentLap')} | Fuel: {g('Fuel')}L",
-            f"Position: P{g('Position')}/{g('OpponentsCount')} | Delta to best: {g('BestSplitDelta')}s",
-            f"Tyre wear (avg): {g('TyresWearAvg')}% | FL {g('TyreWearFrontLeft')}% / FR {g('TyreWearFrontRight')}%"
-            f" / RL {g('TyreWearRearLeft')}% / RR {g('TyreWearRearRight')}%",
-            f"Tyre temp: FL {g('TyreTemperatureFrontLeft')}°C / FR {g('TyreTemperatureFrontRight')}°C"
-            f" / RL {g('TyreTemperatureRearLeft')}°C / RR {g('TyreTemperatureRearRight')}°C",
-            f"Tyre pressure: FL {g('TyrePressureFrontLeft')} / FR {g('TyrePressureFrontRight')}"
-            f" / RL {g('TyrePressureRearLeft')} / RR {g('TyrePressureRearRight')}",
-            f"Engine oil: {g('OilTemperature')}°C | Coolant: {g('WaterTemperature')}°C"
-            f" | ERS: {g('ERSPercent')}%",
-            f"Last lap: {g('LastLapTime')} | Best: {g('BestLapTime')} | Current: {g('CurrentLapTime')}",
-            f"Yellow: {g('Flag_Yellow')} | In pit: {g('IsInPit')}"
-            f" | ABS: {g('ABSActive')} | TC: {g('TCActive')}",
-            f"Class: {g('CarClass')}",
+            f"Track: {g('TrackName')} | Session: {session_label} | Class: {g('VehicleClass')}",
+            f"Speed: {g('SpeedKmh')} km/h | Gear: {g('Gear')} | RPM: {g('EngineRPM')}",
+            f"Position: P{g('Position')}/{g('NumVehicles')} | Lap: {g('TotalLaps')} | Remaining: {remaining_str}",
+            f"Gap: Front {g('GapToFront')}s / Behind {g('GapToBehind')}s / Leader {g('GapToLeader')}s",
+            f"Fuel: {g('Fuel')}L / {g('FuelCapacity')}L",
+            f"Tyre wear: {_tyre_str(data, 'TyreWear')}%",
+            f"Tyre temp: {_tyre_str(data, 'TyreTemp')}°C",
+            f"Tyre pressure: {_tyre_str(data, 'TyrePressure')}kPa",
+            f"Tyre compound: F {g('FrontCompound')} / R {g('RearCompound')}",
+            f"Water: {g('WaterTemp')}°C | Oil: {g('OilTemp')}°C | ERS: {g('ERSBattery')}% | ERS temp: {g('ERSMotorTemp')}°C",
+            f"Last lap: {g('LastLapTime')}s | Best: {g('BestLapTime')}s | Est: {g('EstLapTime')}s",
+            f"Sectors (current): S1 {g('CurSector1')}s / S2 {g('CurSector2')}s",
+            f"Weather: Rain {g('Raining')} | Air {g('AmbientTemp')}°C | Track {g('TrackTemp')}°C | Wind {g('WindSpeed')}m/s",
+            f"Damage: {damage_str}",
+            f"Pit stops: {g('NumPitstops')} | Penalties: {g('NumPenalties')} | Blue flag: {g('BlueFlag')}",
         ]
 
     return '\n'.join(lines)
 
 
-class SimHubPoller(threading.Thread):
-    """Thread 1: polls SimHub REST API every POLL_SEC seconds.
-
-    Stores extracted telemetry in the global `latest_data` dict.
-    Sets the `data_received` event on first successful poll.
-    Errors are printed as warnings — the thread never crashes.
-    """
-
-    def __init__(self):
-        super().__init__(daemon=True, name='SimHubPoller')
-        self._stop_event = threading.Event()
-
-    def stop(self):
-        """Signal the thread to stop after its current sleep."""
-        self._stop_event.set()
-
-    def run(self):
-        global latest_data
-        while not self._stop_event.is_set():
-            try:
-                resp = requests.get(SIMHUB_URL, timeout=5)
-                resp.raise_for_status()
-                raw = resp.json()
-
-                new_data = raw.get('NewData') or {}
-                extracted = {field: new_data.get(field) for field in SIMHUB_FIELDS}
-
-                with data_lock:
-                    latest_data = extracted
-
-                data_received.set()
-
-            except requests.exceptions.ConnectionError:
-                print(f'[WARNING] SimHub not available — retrying in {POLL_SEC}s')
-            except requests.exceptions.Timeout:
-                print(f'[WARNING] SimHub request timed out — retrying in {POLL_SEC}s')
-            except requests.exceptions.RequestException as e:
-                print(f'[WARNING] SimHub error: {e}')
-            except Exception as e:
-                print(f'[WARNING] Unexpected poller error: {e}')
-
-            self._stop_event.wait(POLL_SEC)
-
-
 def call_engineer(user_prompt: str) -> str:
-    """Send telemetry prompt to LM Studio and return the response text.
-
-    Uses the OpenAI-compatible API provided by LM Studio.
-    Raises exceptions on connection failure or timeout — caller handles them.
-    """
     client = OpenAI(base_url=LM_STUDIO_URL, api_key='lm-studio')
-
     response = client.chat.completions.create(
         model=MODEL_NAME,
         messages=[
             {'role': 'system', 'content': SYSTEM_PROMPTS[PERSONA][LANGUAGE]},
-            {'role': 'user', 'content': user_prompt},
+            {'role': 'user',   'content': user_prompt},
         ],
         temperature=0.7,
         max_tokens=1500,
         timeout=LLM_TIMEOUT,
     )
-
     return response.choices[0].message.content.strip()
 
 
 def engineer_loop():
-    """Thread 2 (main thread): every INTERVAL_SEC, read telemetry and call the LLM.
+    reader = RF2Reader()
 
-    Waits for the first SimHub poll to succeed before making any LLM calls.
-    Errors from LM Studio are printed as warnings — the loop never crashes.
-    Stop with Ctrl+C.
-    """
     print('=' * 60)
-    print('  Race Engineer — LMU + SimHub + LM Studio')
+    print('  Race Engineer — LMU + rF2 SharedMemory + LM Studio')
     print(f'  Persona: {PERSONA} | Language: {LANGUAGE} | Model: {MODEL_NAME}')
-    print(f'  SimHub poll: every {POLL_SEC}s | LLM call: every {INTERVAL_SEC}s')
+    print(f'  LLM call: every {INTERVAL_SEC}s')
     print('  Press Ctrl+C to stop.')
     print('=' * 60)
-    print('[INFO] Waiting for first SimHub data...')
 
     while True:
         time.sleep(INTERVAL_SEC)
 
-        if not data_received.is_set():
-            print('[INFO] No SimHub data yet — still waiting...')
+        data = reader.read_snapshot()
+
+        if not data:
+            print('[INFO] LMU not running or not in session — waiting...')
             continue
 
-        with data_lock:
-            current_data = dict(latest_data)
-
-        prompt = build_prompt(current_data, LANGUAGE)
-
-        speed    = get_field(current_data, 'SpeedKmh')
-        lap      = get_field(current_data, 'CurrentLap')
-        fuel     = get_field(current_data, 'Fuel')
-        pos      = get_field(current_data, 'Position')
-        total    = get_field(current_data, 'OpponentsCount')
-        wear_avg = get_field(current_data, 'TyresWearAvg')
-        delta    = get_field(current_data, 'BestSplitDelta')
-        ts       = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        prompt = build_prompt(data, LANGUAGE)
+        ts     = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
         print('=' * 60)
-        print(f'[{ts}] Lap {lap} | {speed} km/h | Fuel: {fuel}L | P{pos}/{total}')
-        print(f'  Tyre wear: {wear_avg}% avg | Delta to best: {delta}s')
+        print(f"[{ts}] Lap {data.get('TotalLaps')} | {data.get('SpeedKmh')} km/h | "
+              f"Fuel: {data.get('Fuel')}L | P{data.get('Position')}/{data.get('NumVehicles')}")
+        print(f"  Gap: +{data.get('GapToFront')}s / -{data.get('GapToBehind')}s | "
+              f"Leader: {data.get('GapToLeader')}s")
         print('-' * 60)
 
         try:
@@ -255,7 +200,7 @@ def engineer_loop():
                 print('[WARNING] LLM returned empty response — skipping')
         except Exception as e:
             err = str(e).lower()
-            if 'connection' in err or 'refused' in err or 'connect' in err:
+            if 'connection' in err or 'refused' in err:
                 print('[WARNING] LM Studio not available — skipping this cycle')
             elif 'timeout' in err or 'timed out' in err:
                 print('[WARNING] LLM timed out — skipping this cycle')
@@ -266,13 +211,7 @@ def engineer_loop():
 
 
 if __name__ == '__main__':
-    poller = SimHubPoller()
-    poller.start()
-
     try:
         engineer_loop()
     except KeyboardInterrupt:
-        print('\n[INFO] Shutting down...')
-        poller.stop()
-        poller.join(timeout=POLL_SEC + 1)
-        print('[INFO] Race Engineer stopped. Good race!')
+        print('\n[INFO] Race Engineer stopped. Good race!')
