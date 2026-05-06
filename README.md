@@ -1,5 +1,7 @@
 # LMU AI Race Engineer
 
+[English version available here](README_EN.md)
+
 AIがリアルタイムのテレメトリを読み取り、レース無線風の指示を出してくれるツールです。  
 Le Mans Ultimate + LM Studio（ローカルLLM）を組み合わせて動作します。
 
