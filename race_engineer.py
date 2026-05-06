@@ -86,7 +86,7 @@ def _session_name(session_id: int) -> str:
 def build_prompt(data: dict, language: str) -> str:
     g = lambda key, default='N/A': _g(data, key, default)
 
-    session_label = _session_name(int(g('Session', '0')))
+    session_label = _session_name(int(float(g('Session', '0'))))
 
     time_rem = data.get('TimeRemaining')
     laps_rem = data.get('LapsRemaining')
@@ -100,13 +100,14 @@ def build_prompt(data: dict, language: str) -> str:
         remaining_str = 'N/A'
 
     damage_parts = []
-    if data.get('DamageSummary', 'なし') != 'なし':
-        damage_parts.append(f'車体:{g("DamageSummary")}')
+    dmg = data.get('DamageSummary')
+    if dmg and dmg not in ('なし', 'none', '', 'None'):
+        damage_parts.append(f'車体:{dmg}' if language == 'ja' else f'Body:{dmg}')
     if data.get('PartDetached'):
-        damage_parts.append('パーツ脱落')
+        damage_parts.append('パーツ脱落' if language == 'ja' else 'Part detached')
     if data.get('Overheating'):
-        damage_parts.append('過熱警告')
-    damage_str = ' / '.join(damage_parts) if damage_parts else 'なし'
+        damage_parts.append('過熱警告' if language == 'ja' else 'Overheat warning')
+    damage_str = ' / '.join(damage_parts) if damage_parts else ('なし' if language == 'ja' else 'none')
 
     if language == 'ja':
         lines = [
@@ -160,7 +161,10 @@ def call_engineer(user_prompt: str) -> str:
         max_tokens=1500,
         timeout=LLM_TIMEOUT,
     )
-    return response.choices[0].message.content.strip()
+    if not response.choices:
+        return ''
+    content = response.choices[0].message.content
+    return content.strip() if content else ''
 
 
 def engineer_loop():
@@ -188,8 +192,8 @@ def engineer_loop():
         print('=' * 60)
         print(f"[{ts}] Lap {data.get('TotalLaps')} | {data.get('SpeedKmh')} km/h | "
               f"Fuel: {data.get('Fuel')}L | P{data.get('Position')}/{data.get('NumVehicles')}")
-        print(f"  Gap: +{data.get('GapToFront')}s / -{data.get('GapToBehind')}s | "
-              f"Leader: {data.get('GapToLeader')}s")
+        print(f"  Gap: +{data.get('GapToFront') or 'N/A'}s / -{data.get('GapToBehind') or 'N/A'}s | "
+              f"Leader: {data.get('GapToLeader') or 'N/A'}s")
         print('-' * 60)
 
         try:
