@@ -29,3 +29,17 @@ Thumbs.db
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Probe / investigation scripts
+gap_probe.py
+udp_probe.py
+ws_probe.py
+*_output.json
+*_output.txt
+
+# Claude Code
+.claude/
+
+# Superpowers docs (local only)
+docs/superpowers/plans/
+docs/superpowers/specs/2026-05-06-rf2-sharedmemory-integration-design.md
