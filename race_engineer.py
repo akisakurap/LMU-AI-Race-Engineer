@@ -12,6 +12,7 @@ from datetime import datetime
 from openai import OpenAI
 
 from rf2_reader import RF2Reader
+from tts_engine import speak
 
 # ============================================================
 # Configuration
@@ -200,6 +201,7 @@ def engineer_loop():
             answer = call_engineer(prompt)
             if answer:
                 print(f'[ENGINEER] {answer}')
+                speak(answer, LANGUAGE)
             else:
                 print('[WARNING] LLM returned empty response — skipping')
         except Exception as e:
