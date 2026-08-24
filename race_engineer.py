@@ -6,16 +6,21 @@ Live race engineer assistant for Le Mans Ultimate via rF2 SharedMemory + LM Stud
 Configuration variables are at the top of this file.
 """
 
+import argparse
 import time
 from datetime import datetime
 
-from openai import OpenAI
+from openai import APIConnectionError, APITimeoutError, OpenAI
 
 from rf2_reader import RF2Reader
 from tts_engine import speak
 
 # ============================================================
 # Configuration
+#
+# Defaults below can be overridden per-run with CLI flags, e.g.:
+#   python race_engineer.py --language en --persona girl --no-tts
+# Run `python race_engineer.py --help` for the full list.
 # ============================================================
 LANGUAGE     = 'ja'
 PERSONA      = 'default'
@@ -23,6 +28,7 @@ MODEL_NAME   = 'google/gemma-4-e2b'
 INTERVAL_SEC = 10
 LLM_TIMEOUT  = 30
 LM_STUDIO_URL = 'http://localhost:1234/v1'
+ENABLE_TTS   = True
 
 # ============================================================
 # System prompts
@@ -150,6 +156,14 @@ def build_prompt(data: dict, language: str) -> str:
     return '\n'.join(lines)
 
 
+def format_gap_line(data: dict) -> str:
+    """Console status line for gaps. Uses `_g` so a genuine 0.0s gap prints
+    as "0.0s" instead of falling back to "N/A" (a plain `or 'N/A'` treats
+    0.0 as falsy)."""
+    return (f"  Gap: +{_g(data, 'GapToFront')}s / -{_g(data, 'GapToBehind')}s | "
+            f"Leader: {_g(data, 'GapToLeader')}s")
+
+
 def call_engineer(user_prompt: str) -> str:
     client = OpenAI(base_url=LM_STUDIO_URL, api_key='lm-studio')
     response = client.chat.completions.create(
@@ -193,30 +207,58 @@ def engineer_loop():
         print('=' * 60)
         print(f"[{ts}] Lap {data.get('TotalLaps')} | {data.get('SpeedKmh')} km/h | "
               f"Fuel: {data.get('Fuel')}L | P{data.get('Position')}/{data.get('NumVehicles')}")
-        print(f"  Gap: +{data.get('GapToFront') or 'N/A'}s / -{data.get('GapToBehind') or 'N/A'}s | "
-              f"Leader: {data.get('GapToLeader') or 'N/A'}s")
+        print(format_gap_line(data))
         print('-' * 60)
 
         try:
             answer = call_engineer(prompt)
             if answer:
                 print(f'[ENGINEER] {answer}')
-                speak(answer, LANGUAGE)
+                if ENABLE_TTS:
+                    speak(answer, LANGUAGE)
             else:
                 print('[WARNING] LLM returned empty response — skipping')
+        except APIConnectionError:
+            print('[WARNING] LM Studio not available — skipping this cycle')
+        except APITimeoutError:
+            print('[WARNING] LLM timed out — skipping this cycle')
         except Exception as e:
-            err = str(e).lower()
-            if 'connection' in err or 'refused' in err:
-                print('[WARNING] LM Studio not available — skipping this cycle')
-            elif 'timeout' in err or 'timed out' in err:
-                print('[WARNING] LLM timed out — skipping this cycle')
-            else:
-                print(f'[WARNING] LLM error: {e}')
+            print(f'[WARNING] LLM error: {e}')
 
         print('=' * 60)
 
 
+def parse_args(argv=None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description='LMU AI Race Engineer — live radio-style engineer for Le Mans Ultimate.',
+    )
+    parser.add_argument('--language', choices=['ja', 'en'], default=LANGUAGE,
+                         help=f"Radio message language (default: {LANGUAGE})")
+    parser.add_argument('--persona', choices=sorted(SYSTEM_PROMPTS.keys()), default=PERSONA,
+                         help=f"AI persona (default: {PERSONA})")
+    parser.add_argument('--model', default=MODEL_NAME,
+                         help=f"Model name exactly as loaded in LM Studio (default: {MODEL_NAME})")
+    parser.add_argument('--interval', type=float, default=INTERVAL_SEC,
+                         help=f"Seconds between LLM calls (default: {INTERVAL_SEC})")
+    parser.add_argument('--timeout', type=float, default=LLM_TIMEOUT,
+                         help=f"LLM call timeout in seconds (default: {LLM_TIMEOUT})")
+    parser.add_argument('--lm-studio-url', default=LM_STUDIO_URL,
+                         help=f"LM Studio base URL (default: {LM_STUDIO_URL})")
+    parser.add_argument('--no-tts', action='store_true',
+                         help='Disable local TTS voice playback (text output only)')
+    return parser.parse_args(argv)
+
+
 if __name__ == '__main__':
+    args = parse_args()
+    LANGUAGE      = args.language
+    PERSONA       = args.persona
+    MODEL_NAME    = args.model
+    INTERVAL_SEC  = args.interval
+    LLM_TIMEOUT   = args.timeout
+    LM_STUDIO_URL = args.lm_studio_url
+    ENABLE_TTS    = not args.no_tts
+
     try:
         engineer_loop()
     except KeyboardInterrupt:

@@ -74,15 +74,23 @@ pip install openai
 
 > **Tip:** If using a reasoning/thinking model, consider increasing `max_tokens` (default: 1500).
 
-### 5. Edit configuration
+### 5. Configure (optional)
 
-Edit the variables at the top of `race_engineer.py` to match your setup:
+Override the defaults per run with CLI flags — no need to edit the source:
+
+```bash
+python race_engineer.py --language en --persona girl --model google/gemma-4-e2b
+```
+
+Or, to make a setting permanent, edit the variables at the top of `race_engineer.py`:
 
 ```python
 LANGUAGE   = 'en'                   # 'ja' (Japanese) or 'en' (English)
 PERSONA    = 'default'              # 'default' (pro engineer) or 'girl' (Ai)
 MODEL_NAME = 'google/gemma-4-e2b'  # Exact model name as shown in LM Studio
 ```
+
+Run `python race_engineer.py --help` to see every available option.
 
 ---
 
@@ -136,6 +144,9 @@ Press `Ctrl+C` to stop.
 | `INTERVAL_SEC` | `10` | Seconds between LLM calls |
 | `LLM_TIMEOUT` | `30` | LLM call timeout in seconds |
 | `LM_STUDIO_URL` | `http://localhost:1234/v1` | LM Studio base URL |
+| `ENABLE_TTS` | `True` | Enable/disable spoken (TTS) output |
+
+Matching CLI flags: `--language` / `--persona` / `--model` / `--interval` / `--timeout` / `--lm-studio-url` / `--no-tts`
 
 ---
 
@@ -191,6 +202,17 @@ Pit stops: 1 | Penalties: 0 | Blue flag: False
 > **This prompt is a work in progress.**  
 > Have ideas? "This field is useless", "I want X data too", "Format it differently" — all feedback is welcome.  
 > Feel free to open an [Issue](https://github.com/akisakurap/LMU-AI-Race-Engineer/issues) and share your thoughts.
+
+---
+
+## Testing
+
+The core logic can be tested without LMU or LM Studio running:
+
+```bash
+pip install -r requirements.txt -r requirements-dev.txt
+pytest
+```
 
 ---
 

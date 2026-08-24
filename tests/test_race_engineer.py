@@ -1,7 +1,7 @@
 """tests/test_race_engineer.py"""
 
 import pytest
-from race_engineer import build_prompt, _session_name, _tyre_str
+from race_engineer import build_prompt, format_gap_line, parse_args, _session_name, _tyre_str
 
 
 # -----------------------------------------------------------------------
@@ -109,3 +109,55 @@ def test_tyre_str_normal():
 def test_tyre_str_missing():
     result = _tyre_str({}, 'TyreWear')
     assert result == 'N/A'
+
+
+# -----------------------------------------------------------------------
+# format_gap_line
+# -----------------------------------------------------------------------
+
+def test_format_gap_line_normal():
+    data = {'GapToFront': 1.234, 'GapToBehind': 0.876, 'GapToLeader': 8.5}
+    line = format_gap_line(data)
+    assert '+1.234s' in line
+    assert '-0.876s' in line
+    assert 'Leader: 8.5s' in line
+
+
+def test_format_gap_line_zero_gap_is_not_na():
+    # A gap of exactly 0.0 is falsy in Python — a naive `data.get(k) or 'N/A'`
+    # would wrongly show "N/A" instead of the real 0.0s gap.
+    data = {'GapToFront': 0.0, 'GapToBehind': 0.0, 'GapToLeader': 0.0}
+    line = format_gap_line(data)
+    assert 'N/A' not in line
+    assert '+0.0s' in line
+    assert '-0.0s' in line
+
+
+def test_format_gap_line_missing_data_shows_na():
+    assert format_gap_line({}) == '  Gap: +N/As / -N/As | Leader: N/As'
+
+
+# -----------------------------------------------------------------------
+# parse_args (CLI overrides)
+# -----------------------------------------------------------------------
+
+def test_parse_args_defaults():
+    args = parse_args([])
+    assert args.language == 'ja'
+    assert args.persona == 'default'
+    assert args.no_tts is False
+
+
+def test_parse_args_overrides():
+    args = parse_args(['--language', 'en', '--persona', 'girl',
+                        '--model', 'my-model', '--interval', '5', '--no-tts'])
+    assert args.language == 'en'
+    assert args.persona == 'girl'
+    assert args.model == 'my-model'
+    assert args.interval == 5.0
+    assert args.no_tts is True
+
+
+def test_parse_args_rejects_invalid_persona():
+    with pytest.raises(SystemExit):
+        parse_args(['--persona', 'nonexistent'])
