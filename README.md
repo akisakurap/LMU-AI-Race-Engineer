@@ -59,10 +59,16 @@ cd LMU-AI
 ### 2. 依存ライブラリをインストール
 
 ```bash
-pip install openai
+pip install -r requirements.txt
 ```
 
 `mmap` と `ctypes` は Python 標準ライブラリに含まれているため、追加インストール不要です。
+
+音声読み上げ（TTS）を使う場合は、追加で以下もインストールしてください（未インストールでも `--no-tts` で動作します）。
+
+```bash
+pip install -r requirements-tts.txt
+```
 
 ### 3. LMU の SharedMemory プラグインを確認
 
@@ -93,6 +99,17 @@ MODEL_NAME = 'google/gemma-4-e2b'  # LM Studio でロードしているモデル
 ```
 
 利用可能なオプション一覧は `python race_engineer.py --help` で確認できます。
+
+### 6. 音声読み上げ（TTS、任意）
+
+`requirements-tts.txt` をインストール済みなら、LLMの返答をローカルTTSで読み上げます（バックグラウンドスレッドで再生されるため、次のテレメトリ取得を止めません）。
+
+| 言語 | エンジン | 必要な準備 |
+|---|---|---|
+| 日本語 | [Voicevox](https://voicevox.hiroshiba.jp/) | デスクトップアプリを起動しておく（デフォルト: `localhost:50021`） |
+| English | Kokoro-TTS | `pip install -r requirements-tts.txt` のみ（完全オフライン） |
+
+Voicevoxが未起動、またはKokoroの初期化に失敗した場合は警告ログを出してスキップし、テキスト表示とループは継続します。読み上げ自体を無効にしたい場合は `--no-tts` を指定してください。
 
 ---
 

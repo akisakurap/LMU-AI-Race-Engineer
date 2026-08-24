@@ -6,11 +6,13 @@ behaviour that matters most: TTS must never crash the race engineer loop,
 and `speak()` must dispatch to the right engine for each language.
 """
 
+import threading
+import time
 from unittest.mock import MagicMock, patch
 
 import requests
 
-from tts_engine import _speak_voicevox, speak
+from tts_engine import _speak_voicevox, speak, speak_async
 
 
 def test_speak_empty_text_is_noop():
@@ -61,3 +63,60 @@ def test_speak_voicevox_bad_response_is_swallowed():
     bad_response.raise_for_status.side_effect = requests.exceptions.HTTPError('500')
     with patch('requests.post', return_value=bad_response):
         _speak_voicevox('hello')  # should log a warning and return, not raise
+
+
+# -----------------------------------------------------------------------
+# speak_async — non-blocking playback via the background worker thread
+# -----------------------------------------------------------------------
+
+def test_speak_async_empty_text_is_noop():
+    with patch('tts_engine.speak') as mock_speak:
+        speak_async('', 'ja')
+        speak_async('   ', 'en')
+        time.sleep(0.05)
+    mock_speak.assert_not_called()
+
+
+def test_speak_async_returns_immediately_without_waiting_for_playback():
+    called = threading.Event()
+
+    def fake_speak(text, language):
+        time.sleep(0.3)
+        called.set()
+
+    with patch('tts_engine.speak', side_effect=fake_speak):
+        start = time.monotonic()
+        speak_async('first message', 'ja')
+        elapsed = time.monotonic() - start
+        assert elapsed < 0.1, 'speak_async must return before playback finishes'
+        assert called.wait(timeout=2), 'background worker never invoked speak()'
+
+
+def test_speak_async_drops_stale_message_when_backlogged():
+    # If two messages arrive while the worker is still busy with an earlier
+    # one, only the newest should end up spoken — telemetry-driven radio
+    # calls go stale fast, so catching up on a backlog is worse than
+    # skipping straight to the latest instruction.
+    started = threading.Event()
+    release = threading.Event()
+    seen = []
+
+    def fake_speak(text, language):
+        seen.append(text)
+        started.set()
+        release.wait(timeout=2)
+
+    with patch('tts_engine.speak', side_effect=fake_speak):
+        speak_async('A', 'ja')
+        assert started.wait(timeout=2), 'worker never started processing the first message'
+
+        speak_async('B', 'ja')  # queued
+        speak_async('C', 'ja')  # replaces B — B is dropped, never spoken
+
+        started.clear()
+        release.set()  # let 'A' finish so the worker can pick up the next item
+
+        assert started.wait(timeout=2), 'worker never started processing the next message'
+        release.set()
+
+    assert seen == ['A', 'C']

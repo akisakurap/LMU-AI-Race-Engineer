@@ -58,10 +58,16 @@ cd LMU-AI
 ### 2. Install dependencies
 
 ```bash
-pip install openai
+pip install -r requirements.txt
 ```
 
 `mmap` and `ctypes` are part of the Python standard library — no additional packages needed.
+
+For voice output (TTS), also install (the app still runs fine without it via `--no-tts`):
+
+```bash
+pip install -r requirements-tts.txt
+```
 
 ### 3. Verify the LMU SharedMemory plugin
 
@@ -91,6 +97,17 @@ MODEL_NAME = 'google/gemma-4-e2b'  # Exact model name as shown in LM Studio
 ```
 
 Run `python race_engineer.py --help` to see every available option.
+
+### 6. Voice output (TTS, optional)
+
+If `requirements-tts.txt` is installed, LLM responses are read aloud on a background thread — playback never blocks the next telemetry read.
+
+| Language | Engine | Setup needed |
+|---|---|---|
+| Japanese | [Voicevox](https://voicevox.hiroshiba.jp/) | Run the desktop app in the background (default: `localhost:50021`) |
+| English | Kokoro-TTS | Just `pip install -r requirements-tts.txt` (fully offline) |
+
+If Voicevox isn't running, or Kokoro fails to initialize, a warning is logged and playback is skipped — text output and the loop keep going either way. Pass `--no-tts` to disable voice output entirely.
 
 ---
 

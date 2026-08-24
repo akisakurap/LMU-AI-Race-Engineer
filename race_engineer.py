@@ -13,7 +13,7 @@ from datetime import datetime
 from openai import APIConnectionError, APITimeoutError, OpenAI
 
 from rf2_reader import RF2Reader
-from tts_engine import speak
+from tts_engine import speak_async
 
 # ============================================================
 # Configuration
@@ -215,7 +215,9 @@ def engineer_loop():
             if answer:
                 print(f'[ENGINEER] {answer}')
                 if ENABLE_TTS:
-                    speak(answer, LANGUAGE)
+                    # Non-blocking: playback runs on a background thread so
+                    # this cycle doesn't stall waiting for speech to finish.
+                    speak_async(answer, LANGUAGE)
             else:
                 print('[WARNING] LLM returned empty response — skipping')
         except APIConnectionError:
