@@ -151,6 +151,20 @@ Press `Ctrl+C` to stop.
 
 ---
 
+## Using the GUI
+
+Prefer a desktop window over the terminal? Run this instead (no extra install — it's built on Tkinter, part of the Python standard library):
+
+```bash
+python gui.py
+```
+
+- The top config bar lets you change language, persona, model name, LM Studio URL, interval, timeout, and TTS on/off, then **Start** to begin and **Stop** at any time (same settings as the CLI's `race_engineer.py`)
+- The left pane shows the current telemetry (exactly what's sent to the LLM); the right pane shows a timestamped log of engineer radio messages
+- If LMU isn't running or you're not in a session, the status bar says so and keeps waiting automatically
+
+---
+
 ## Configuration reference
 
 | Variable | Default | Description |

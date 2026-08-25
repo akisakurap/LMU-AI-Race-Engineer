@@ -3,7 +3,9 @@ race_engineer.py
 ================
 Live race engineer assistant for Le Mans Ultimate via rF2 SharedMemory + LM Studio.
 
-Configuration variables are at the top of this file.
+Configuration variables are at the top of this file. This module also
+provides run_one_cycle(), which gui.py (via engineer_worker.py) reuses to
+drive the same logic from a desktop window instead of the terminal.
 """
 
 import argparse
@@ -182,6 +184,48 @@ def call_engineer(user_prompt: str) -> str:
     return content.strip() if content else ''
 
 
+def run_one_cycle(reader: RF2Reader) -> dict:
+    """Read one telemetry snapshot and call the LLM. Pure logic, no I/O
+    side effects (no print/speak) — shared by the CLI loop and the GUI so
+    both present the same result differently instead of duplicating it.
+
+    Returns a dict:
+        {'ok': bool, 'data': dict | None, 'message': str | None,
+         'error': str | None, 'reason': str | None}
+
+    `reason` is one of: 'no_data', 'connection', 'timeout', 'empty', 'error',
+    or None when `ok` is True.
+    """
+    data = reader.read_snapshot()
+    if not data:
+        return {'ok': False, 'data': None, 'message': None,
+                'error': None, 'reason': 'no_data'}
+
+    prompt = build_prompt(data, LANGUAGE)
+
+    try:
+        answer = call_engineer(prompt)
+    except APITimeoutError:
+        # Must be checked before APIConnectionError: APITimeoutError is a
+        # subclass of it in the openai SDK, so the broader except would
+        # otherwise swallow timeouts and misreport them as "not available".
+        return {'ok': False, 'data': data, 'message': None,
+                'error': 'LLM timed out', 'reason': 'timeout'}
+    except APIConnectionError:
+        return {'ok': False, 'data': data, 'message': None,
+                'error': 'LM Studio not available', 'reason': 'connection'}
+    except Exception as e:
+        return {'ok': False, 'data': data, 'message': None,
+                'error': str(e), 'reason': 'error'}
+
+    if not answer:
+        return {'ok': False, 'data': data, 'message': None,
+                'error': 'LLM returned empty response', 'reason': 'empty'}
+
+    return {'ok': True, 'data': data, 'message': answer,
+            'error': None, 'reason': None}
+
+
 def engineer_loop():
     reader = RF2Reader()
 
@@ -195,14 +239,14 @@ def engineer_loop():
     while True:
         time.sleep(INTERVAL_SEC)
 
-        data = reader.read_snapshot()
+        result = run_one_cycle(reader)
 
-        if not data:
+        if result['reason'] == 'no_data':
             print('[INFO] LMU not running or not in session — waiting...')
             continue
 
-        prompt = build_prompt(data, LANGUAGE)
-        ts     = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        data = result['data']
+        ts   = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
         print('=' * 60)
         print(f"[{ts}] Lap {data.get('TotalLaps')} | {data.get('SpeedKmh')} km/h | "
@@ -210,22 +254,14 @@ def engineer_loop():
         print(format_gap_line(data))
         print('-' * 60)
 
-        try:
-            answer = call_engineer(prompt)
-            if answer:
-                print(f'[ENGINEER] {answer}')
-                if ENABLE_TTS:
-                    # Non-blocking: playback runs on a background thread so
-                    # this cycle doesn't stall waiting for speech to finish.
-                    speak_async(answer, LANGUAGE)
-            else:
-                print('[WARNING] LLM returned empty response — skipping')
-        except APIConnectionError:
-            print('[WARNING] LM Studio not available — skipping this cycle')
-        except APITimeoutError:
-            print('[WARNING] LLM timed out — skipping this cycle')
-        except Exception as e:
-            print(f'[WARNING] LLM error: {e}')
+        if result['ok']:
+            print(f"[ENGINEER] {result['message']}")
+            if ENABLE_TTS:
+                # Non-blocking: playback runs on a background thread so
+                # this cycle doesn't stall waiting for speech to finish.
+                speak_async(result['message'], LANGUAGE)
+        else:
+            print(f"[WARNING] {result['error']}")
 
         print('=' * 60)
 
