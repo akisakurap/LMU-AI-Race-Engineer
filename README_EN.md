@@ -58,10 +58,16 @@ cd LMU-AI
 ### 2. Install dependencies
 
 ```bash
-pip install openai
+pip install -r requirements.txt
 ```
 
 `mmap` and `ctypes` are part of the Python standard library — no additional packages needed.
+
+For voice output (TTS), also install (the app still runs fine without it via `--no-tts`):
+
+```bash
+pip install -r requirements-tts.txt
+```
 
 ### 3. Verify the LMU SharedMemory plugin
 
@@ -74,15 +80,34 @@ pip install openai
 
 > **Tip:** If using a reasoning/thinking model, consider increasing `max_tokens` (default: 1500).
 
-### 5. Edit configuration
+### 5. Configure (optional)
 
-Edit the variables at the top of `race_engineer.py` to match your setup:
+Override the defaults per run with CLI flags — no need to edit the source:
+
+```bash
+python race_engineer.py --language en --persona girl --model google/gemma-4-e2b
+```
+
+Or, to make a setting permanent, edit the variables at the top of `race_engineer.py`:
 
 ```python
 LANGUAGE   = 'en'                   # 'ja' (Japanese) or 'en' (English)
 PERSONA    = 'default'              # 'default' (pro engineer) or 'girl' (Ai)
 MODEL_NAME = 'google/gemma-4-e2b'  # Exact model name as shown in LM Studio
 ```
+
+Run `python race_engineer.py --help` to see every available option.
+
+### 6. Voice output (TTS, optional)
+
+If `requirements-tts.txt` is installed, LLM responses are read aloud on a background thread — playback never blocks the next telemetry read.
+
+| Language | Engine | Setup needed |
+|---|---|---|
+| Japanese | [Voicevox](https://voicevox.hiroshiba.jp/) | Run the desktop app in the background (default: `localhost:50021`) |
+| English | Kokoro-TTS | Just `pip install -r requirements-tts.txt` (fully offline) |
+
+If Voicevox isn't running, or Kokoro fails to initialize, a warning is logged and playback is skipped — text output and the loop keep going either way. Pass `--no-tts` to disable voice output entirely.
 
 ---
 
@@ -136,6 +161,9 @@ Press `Ctrl+C` to stop.
 | `INTERVAL_SEC` | `10` | Seconds between LLM calls |
 | `LLM_TIMEOUT` | `30` | LLM call timeout in seconds |
 | `LM_STUDIO_URL` | `http://localhost:1234/v1` | LM Studio base URL |
+| `ENABLE_TTS` | `True` | Enable/disable spoken (TTS) output |
+
+Matching CLI flags: `--language` / `--persona` / `--model` / `--interval` / `--timeout` / `--lm-studio-url` / `--no-tts`
 
 ---
 
@@ -191,6 +219,17 @@ Pit stops: 1 | Penalties: 0 | Blue flag: False
 > **This prompt is a work in progress.**  
 > Have ideas? "This field is useless", "I want X data too", "Format it differently" — all feedback is welcome.  
 > Feel free to open an [Issue](https://github.com/akisakurap/LMU-AI-Race-Engineer/issues) and share your thoughts.
+
+---
+
+## Testing
+
+The core logic can be tested without LMU or LM Studio running:
+
+```bash
+pip install -r requirements.txt -r requirements-dev.txt
+pytest
+```
 
 ---
 

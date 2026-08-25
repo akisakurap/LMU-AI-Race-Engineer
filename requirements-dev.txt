@@ -1,0 +1,6 @@
+pytest>=7.0.0
+
+# tests/test_tts_engine.py exercises the Voicevox HTTP call path (mocked),
+# which needs `requests` importable without pulling in the rest of
+# requirements-tts.txt (kokoro/sounddevice/soundfile/numpy).
+requests>=2.31.0

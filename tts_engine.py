@@ -7,13 +7,22 @@ Local TTS engine for LMU Race Engineer.
 - English  : Kokoro-TTS (Python library, offline)
 
 Usage:
-    from tts_engine import speak
-    speak("タイヤ温度が高いです。ペースを落としてください。", "ja")
-    speak("Tyre temps are high. Back off the pace.", "en")
+    from tts_engine import speak, speak_async
+    speak("タイヤ温度が高いです。ペースを落としてください。", "ja")        # blocking
+    speak_async("Tyre temps are high. Back off the pace.", "en")  # non-blocking
+
+`speak_async` hands the text to a background worker thread and returns
+immediately, so a caller like the telemetry polling loop never stalls for
+the duration of speech synthesis + playback. Only the most recent message
+is kept queued — if playback is still catching up when a newer message
+arrives, the stale one is dropped in favor of the latest telemetry-driven
+instruction, and messages are always spoken one at a time (never overlapped).
 """
 
 import io
 import logging
+import queue
+import threading
 
 logger = logging.getLogger(__name__)
 
@@ -134,3 +143,49 @@ def speak(text: str, language: str) -> None:
             _speak_kokoro(text)
     except Exception as e:
         logger.warning('[TTS] Unexpected error: %s', e)
+
+
+# ============================================================
+# Non-blocking playback (background worker thread)
+# ============================================================
+_speech_queue = queue.Queue(maxsize=1)
+_worker_thread = None
+_worker_lock = threading.Lock()
+
+
+def _worker_loop() -> None:
+    while True:
+        language, text = _speech_queue.get()
+        speak(text, language)
+
+
+def _ensure_worker_started() -> None:
+    global _worker_thread
+    with _worker_lock:
+        if _worker_thread is None or not _worker_thread.is_alive():
+            _worker_thread = threading.Thread(target=_worker_loop, daemon=True)
+            _worker_thread.start()
+
+
+def speak_async(text: str, language: str) -> None:
+    """Non-blocking version of `speak()`.
+
+    Queues *text* for the background worker thread and returns immediately.
+    If the worker is still speaking a previous message, the newest message
+    replaces any not-yet-started one in the queue (capacity 1) rather than
+    piling up a backlog of stale radio calls.
+    """
+    if not text or not text.strip():
+        return
+    _ensure_worker_started()
+    try:
+        _speech_queue.put_nowait((language, text))
+    except queue.Full:
+        try:
+            _speech_queue.get_nowait()
+        except queue.Empty:
+            pass
+        try:
+            _speech_queue.put_nowait((language, text))
+        except queue.Full:
+            pass

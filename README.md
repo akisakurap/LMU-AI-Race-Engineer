@@ -59,10 +59,16 @@ cd LMU-AI
 ### 2. 依存ライブラリをインストール
 
 ```bash
-pip install openai
+pip install -r requirements.txt
 ```
 
 `mmap` と `ctypes` は Python 標準ライブラリに含まれているため、追加インストール不要です。
+
+音声読み上げ（TTS）を使う場合は、追加で以下もインストールしてください（未インストールでも `--no-tts` で動作します）。
+
+```bash
+pip install -r requirements-tts.txt
+```
 
 ### 3. LMU の SharedMemory プラグインを確認
 
@@ -76,15 +82,34 @@ LMU をインストールした時点で `rFactor2SharedMemoryMapPlugin64.dll` �
 
 > **Tip:** 推論モデル（Thinking model）を使う場合は `max_tokens` を大きめに設定してください（デフォルト: 1500）。
 
-### 5. 設定を編集
+### 5. 設定を変更（お好みで）
 
-`race_engineer.py` の上部にある設定変数を自分の環境に合わせて変更します。
+毎回コードを編集しなくても、コマンドライン引数で上書きできます。
+
+```bash
+python race_engineer.py --language en --persona girl --model google/gemma-4-e2b
+```
+
+固定の設定にしたい場合は、`race_engineer.py` の上部にある設定変数を直接書き換えても構いません。
 
 ```python
 LANGUAGE   = 'ja'                   # 'ja'（日本語）または 'en'（英語）
 PERSONA    = 'default'              # 'default'（プロ）または 'girl'（アイちゃん）
 MODEL_NAME = 'google/gemma-4-e2b'  # LM Studio でロードしているモデル名（完全一致）
 ```
+
+利用可能なオプション一覧は `python race_engineer.py --help` で確認できます。
+
+### 6. 音声読み上げ（TTS、任意）
+
+`requirements-tts.txt` をインストール済みなら、LLMの返答をローカルTTSで読み上げます（バックグラウンドスレッドで再生されるため、次のテレメトリ取得を止めません）。
+
+| 言語 | エンジン | 必要な準備 |
+|---|---|---|
+| 日本語 | [Voicevox](https://voicevox.hiroshiba.jp/) | デスクトップアプリを起動しておく（デフォルト: `localhost:50021`） |
+| English | Kokoro-TTS | `pip install -r requirements-tts.txt` のみ（完全オフライン） |
+
+Voicevoxが未起動、またはKokoroの初期化に失敗した場合は警告ログを出してスキップし、テキスト表示とループは継続します。読み上げ自体を無効にしたい場合は `--no-tts` を指定してください。
 
 ---
 
@@ -138,6 +163,9 @@ python race_engineer.py
 | `INTERVAL_SEC` | `10` | LLMへの問い合わせ間隔（秒） |
 | `LLM_TIMEOUT` | `30` | LLM呼び出しのタイムアウト（秒） |
 | `LM_STUDIO_URL` | `http://localhost:1234/v1` | LM StudioのベースURL |
+| `ENABLE_TTS` | `True` | 音声読み上げ（TTS）の有効/無効 |
+
+対応するCLIオプション: `--language` / `--persona` / `--model` / `--interval` / `--timeout` / `--lm-studio-url` / `--no-tts`
 
 ---
 
@@ -194,6 +222,17 @@ LLM に最初に渡す「キャラクター設定」です。
 > **このプロンプトは改善の余地があります。**  
 > 「このデータは不要」「こんな情報も欲しい」「フォーマットをこう変えたい」など、フィードバック大歓迎です。  
 > [Issues](https://github.com/akisakurap/LMU-AI-Race-Engineer/issues) からぜひ意見をお寄せください。
+
+---
+
+## テスト
+
+LMUやLM Studioを起動していなくてもロジック部分のテストは実行できます。
+
+```bash
+pip install -r requirements.txt -r requirements-dev.txt
+pytest
+```
 
 ---
 
