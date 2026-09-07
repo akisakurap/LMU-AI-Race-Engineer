@@ -18,6 +18,13 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
+      # xvfb gives tests/test_gui.py a display to create real Tk widgets
+      # against. If this Python build has no tkinter at all, those tests
+      # just skip themselves (see the importorskip in that file) — this
+      # step only matters when tkinter is present.
+      - name: Install Xvfb (for GUI tests)
+        run: sudo apt-get update && sudo apt-get install -y xvfb
+
       # requirements-tts.txt (kokoro/sounddevice/soundfile) is intentionally
       # skipped: the test suite mocks the audio backends, and those packages
       # need real audio hardware / heavy ML deps that a CI runner doesn't have.
@@ -25,4 +32,4 @@ jobs:
         run: pip install -r requirements.txt -r requirements-dev.txt
 
       - name: Run tests
-        run: pytest -v
+        run: xvfb-run -a pytest -v

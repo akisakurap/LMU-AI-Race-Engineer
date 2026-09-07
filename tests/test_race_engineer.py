@@ -1,7 +1,21 @@
 """tests/test_race_engineer.py"""
 
+from unittest.mock import MagicMock, patch
+
+import openai
 import pytest
-from race_engineer import build_prompt, format_gap_line, parse_args, _session_name, _tyre_str
+
+from race_engineer import build_prompt, format_gap_line, parse_args, run_one_cycle, _session_name, _tyre_str
+
+
+def _make_error(cls, message):
+    """Build a bare instance of an openai exception without going through
+    its real __init__ (which needs a live httpx request object) — only the
+    class/isinstance relationship matters for the `except cls:` branches
+    under test."""
+    err = cls.__new__(cls)
+    Exception.__init__(err, message)
+    return err
 
 
 # -----------------------------------------------------------------------
@@ -161,3 +175,64 @@ def test_parse_args_overrides():
 def test_parse_args_rejects_invalid_persona():
     with pytest.raises(SystemExit):
         parse_args(['--persona', 'nonexistent'])
+
+
+# -----------------------------------------------------------------------
+# run_one_cycle — shared by the CLI loop and the GUI, no I/O side effects
+# -----------------------------------------------------------------------
+
+def _reader_returning(data):
+    reader = MagicMock()
+    reader.read_snapshot.return_value = data
+    return reader
+
+
+def test_run_one_cycle_no_data():
+    result = run_one_cycle(_reader_returning({}))
+    assert result == {'ok': False, 'data': None, 'message': None,
+                       'error': None, 'reason': 'no_data'}
+
+
+def test_run_one_cycle_success():
+    with patch('race_engineer.call_engineer', return_value='ペースは問題ありません。'):
+        result = run_one_cycle(_reader_returning(FULL_DATA))
+    assert result['ok'] is True
+    assert result['reason'] is None
+    assert result['message'] == 'ペースは問題ありません。'
+    assert result['data'] is FULL_DATA
+    assert result['error'] is None
+
+
+def test_run_one_cycle_empty_llm_response():
+    with patch('race_engineer.call_engineer', return_value=''):
+        result = run_one_cycle(_reader_returning(FULL_DATA))
+    assert result['ok'] is False
+    assert result['reason'] == 'empty'
+    assert result['message'] is None
+    assert result['data'] is FULL_DATA
+
+
+def test_run_one_cycle_connection_error():
+    err = _make_error(openai.APIConnectionError, 'boom')
+    with patch('race_engineer.call_engineer', side_effect=err):
+        result = run_one_cycle(_reader_returning(FULL_DATA))
+    assert result['ok'] is False
+    assert result['reason'] == 'connection'
+    assert result['error'] == 'LM Studio not available'
+
+
+def test_run_one_cycle_timeout_error():
+    err = _make_error(openai.APITimeoutError, 'timed out')
+    with patch('race_engineer.call_engineer', side_effect=err):
+        result = run_one_cycle(_reader_returning(FULL_DATA))
+    assert result['ok'] is False
+    assert result['reason'] == 'timeout'
+    assert result['error'] == 'LLM timed out'
+
+
+def test_run_one_cycle_generic_error():
+    with patch('race_engineer.call_engineer', side_effect=RuntimeError('weird failure')):
+        result = run_one_cycle(_reader_returning(FULL_DATA))
+    assert result['ok'] is False
+    assert result['reason'] == 'error'
+    assert result['error'] == 'weird failure'
