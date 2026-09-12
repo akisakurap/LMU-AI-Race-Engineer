@@ -29,14 +29,32 @@ def _open_shm(name: str, size: int):
 
 
 def _read_buffer(shm, buf_type):
-    """共有メモリからバッファ構造体を読む。バージョンが不一致なら None。"""
-    shm.seek(0)
-    raw = shm.read(ctypes.sizeof(buf_type))
-    buf = buf_type.from_buffer_copy(raw)
-    # 書き込み中でないことを確認（begin == end）
-    if buf.mVersionUpdateBegin != buf.mVersionUpdateEnd:
+    """Accept only a full copy bracketed by the same stable version pair."""
+    size = ctypes.sizeof(buf_type)
+    for _ in range(3):
+        shm.seek(0)
+        before = shm.read(8)
+        if len(before) != 8:
+            return None
+        if before[:4] != before[4:]:
+            continue
+        shm.seek(0)
+        raw = shm.read(size)
+        shm.seek(0)
+        after = shm.read(8)
+        if len(raw) != size:
+            return None
+        if before == raw[:8] == after:
+            return buf_type.from_buffer_copy(raw)
+    return None
+
+
+def _finite_values(value):
+    if isinstance(value, float) and not math.isfinite(value):
         return None
-    return buf
+    if isinstance(value, list):
+        return [_finite_values(item) for item in value]
+    return value
 
 
 def _damage_summary(dent: ctypes.Array) -> str:
@@ -88,6 +106,8 @@ class RF2Reader:
                  scor_buf: RF2ScoringBuffer) -> dict:
         info = scor_buf.mScoringInfo
         n    = info.mNumVehicles
+        if not 0 <= n <= len(scor_buf.mVehicles):
+            raise ValueError(f'Invalid scoring vehicle count: {n}')
 
         # プレイヤー車両をスコアリングから特定
         player_s = next(
@@ -100,7 +120,7 @@ class RF2Reader:
 
         # テレメトリ側でも mID で突き合わせ
         player_t = next(
-            (tel_buf.mVehicles[i] for i in range(128)
+            (tel_buf.mVehicles[i] for i in range(len(tel_buf.mVehicles))
              if tel_buf.mVehicles[i].mID == player_s.mID),
             None,
         )
@@ -134,7 +154,9 @@ class RF2Reader:
             if max_laps is not None else None
         )
 
-        return {
+        data = {
+            'PlayerID':      int(player_s.mID),
+            'SessionElapsed': float(info.mCurrentET),
             # --- 速度・駆動系 ---
             'SpeedKmh':      round(vec3_speed_kmh(player_t.mLocalVel), 1),
             'Gear':          int(player_t.mGear),
@@ -197,3 +219,4 @@ class RF2Reader:
             'TrackTemp':     round(float(info.mTrackTemp), 1),
             'WindSpeed':     round(_wind_speed(info.mWind), 1),
         }
+        return {key: _finite_values(value) for key, value in data.items()}

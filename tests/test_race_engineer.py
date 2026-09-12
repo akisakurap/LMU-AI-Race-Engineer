@@ -177,6 +177,31 @@ def test_parse_args_rejects_invalid_persona():
         parse_args(['--persona', 'nonexistent'])
 
 
+@pytest.mark.parametrize('flag', ['--interval', '--timeout', '--max-data-age'])
+@pytest.mark.parametrize('value', ['-1', '0', 'nan', 'inf', '-inf'])
+def test_numeric_options_reject_invalid_values(flag, value):
+    with pytest.raises(SystemExit):
+        parse_args([f'{flag}={value}'])
+
+
+@pytest.mark.parametrize('language', ['ja', 'en'])
+def test_prompt_includes_race_control_and_pit_state(language):
+    prompt = build_prompt(dict(FULL_DATA, YellowFlag=2, SectorFlags=[1, 0, 1],
+                               GamePhase=6, InPits=True, PitState=2), language)
+    assert 'YellowFlag: 2' in prompt
+    assert 'SectorFlags: [1, 0, 1]' in prompt
+    assert 'GamePhase: 6' in prompt
+    assert 'InPits: True' in prompt
+    assert 'PitState: 2' in prompt
+
+
+def test_english_prompt_has_english_session_and_remaining_laps():
+    prompt = build_prompt(dict(FULL_DATA, LapsRemaining=8), 'en')
+    assert 'Session: Race' in prompt
+    assert '8 laps' in prompt
+    assert '残り' not in prompt
+
+
 # -----------------------------------------------------------------------
 # run_one_cycle — shared by the CLI loop and the GUI, no I/O side effects
 # -----------------------------------------------------------------------
@@ -236,3 +261,24 @@ def test_run_one_cycle_generic_error():
     assert result['ok'] is False
     assert result['reason'] == 'error'
     assert result['error'] == 'weird failure'
+
+
+def test_run_one_cycle_discards_reply_after_data_expires():
+    with patch('race_engineer.call_engineer', return_value='old advice'), \
+         patch('race_engineer.time.monotonic', side_effect=[100.0, 125.0]):
+        result = run_one_cycle(_reader_returning(FULL_DATA))
+    assert result['reason'] == 'stale'
+    assert result['message'] is None
+    assert result['ok'] is False
+
+
+def test_run_one_cycle_reports_reader_failure():
+    reader = MagicMock()
+    reader.read_snapshot.side_effect = ValueError('invalid buffer')
+    result = run_one_cycle(reader)
+    assert result['reason'] == 'error'
+    assert result['error'] == 'invalid buffer'
+
+
+def test_max_data_age_can_be_configured():
+    assert parse_args(['--max-data-age', '12']).max_data_age == 12

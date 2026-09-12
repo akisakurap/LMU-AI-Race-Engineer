@@ -7,9 +7,10 @@ on:
 
 jobs:
   pytest:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       matrix:
+        os: [ubuntu-latest, windows-latest]
         python-version: ['3.9', '3.12']
     steps:
       - uses: actions/checkout@v4
@@ -23,6 +24,7 @@ jobs:
       # just skip themselves (see the importorskip in that file) — this
       # step only matters when tkinter is present.
       - name: Install Xvfb (for GUI tests)
+        if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y xvfb
 
       # requirements-tts.txt (kokoro/sounddevice/soundfile) is intentionally
@@ -31,5 +33,10 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt -r requirements-dev.txt
 
-      - name: Run tests
+      - name: Run tests (Linux)
+        if: runner.os == 'Linux'
         run: xvfb-run -a pytest -v
+
+      - name: Run tests (Windows)
+        if: runner.os == 'Windows'
+        run: python -m pytest -v

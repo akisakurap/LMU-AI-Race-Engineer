@@ -6,6 +6,7 @@ thin Tkinter glue on top of this.
 """
 
 import queue
+import threading
 from unittest.mock import patch
 
 import pytest
@@ -135,3 +136,62 @@ def test_run_one_cycle_exception_becomes_error_result_without_killing_worker():
         assert item['ok'] is False
         assert item['reason'] == 'error'
         assert item['error'] == 'boom'
+
+
+def test_stop_during_inference_discards_reply_and_speech():
+    q = queue.Queue()
+    worker = EngineerWorker(q)
+    entered, release = threading.Event(), threading.Event()
+
+    def blocked_cycle(reader):
+        entered.set()
+        assert release.wait(2)
+        return {'ok': True, 'data': {}, 'message': 'late', 'reason': None}
+
+    with patch('engineer_worker.RF2Reader', _FakeReader), \
+         patch.object(engine, 'run_one_cycle', side_effect=blocked_cycle), \
+         patch.object(engine, 'speak_async') as speech:
+        worker.start(True)
+        try:
+            assert entered.wait(2)
+            worker.stop()
+        finally:
+            release.set()
+            worker._thread.join(2)
+        speech.assert_not_called()
+    assert [q.get_nowait()['kind'] for _ in range(q.qsize())] == ['started', 'stopped']
+
+
+def test_telemetry_keeps_updating_during_llm_call():
+    q = queue.Queue()
+    worker = EngineerWorker(q)
+    entered, release = threading.Event(), threading.Event()
+
+    class Reader:
+        def __init__(self):
+            self.fuel = 40
+
+        def read_snapshot(self):
+            self.fuel -= 1
+            return {'Fuel': self.fuel}
+
+    def blocked_cycle(reader):
+        entered.set()
+        release.wait(3)
+        return {'ok': True, 'data': {}, 'message': 'late', 'reason': None}
+
+    with patch('engineer_worker.RF2Reader', Reader), \
+         patch.object(engine, 'run_one_cycle', side_effect=blocked_cycle):
+        worker.start(False)
+        try:
+            assert entered.wait(2)
+            samples = []
+            while len(samples) < 2:
+                item = q.get(timeout=2)
+                if item['kind'] == 'telemetry':
+                    samples.append(item['data']['Fuel'])
+            assert samples[1] < samples[0]
+        finally:
+            worker.stop()
+            release.set()
+            worker._thread.join(3)

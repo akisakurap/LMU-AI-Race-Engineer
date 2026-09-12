@@ -40,7 +40,8 @@ def app():
 def restore_engine_config():
     """_on_start mutates race_engineer's module-level config; restore it
     so these tests can't leak settings into ones that run after them."""
-    keys = ['LANGUAGE', 'PERSONA', 'MODEL_NAME', 'LM_STUDIO_URL', 'INTERVAL_SEC', 'LLM_TIMEOUT']
+    keys = ['LANGUAGE', 'PERSONA', 'MODEL_NAME', 'LM_STUDIO_URL', 'INTERVAL_SEC',
+            'LLM_TIMEOUT', 'MAX_DATA_AGE_SEC']
     original = {k: getattr(engine, k) for k in keys}
     yield
     for k, v in original.items():

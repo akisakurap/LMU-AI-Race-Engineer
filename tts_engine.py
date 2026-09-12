@@ -23,6 +23,8 @@ import io
 import logging
 import queue
 import threading
+import sys
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -41,16 +43,24 @@ _kokoro_pipeline = None
 _kokoro_failed   = False
 
 
+def _play_audio(data, samplerate):
+    import sounddevice as sd
+    # Cancellation and playback start are atomic: synthesis finishing after
+    # Stop must not restart the audio device.
+    with _speech_lock:
+        if not _speech_is_current():
+            return
+        sd.play(data, samplerate)
+    sd.wait()
+
+
 def _play_wav_bytes(wav_bytes: bytes) -> None:
     """Play raw wav bytes via sounddevice."""
-    import numpy as np
-    import sounddevice as sd
     import soundfile as sf
 
     buf = io.BytesIO(wav_bytes)
     data, samplerate = sf.read(buf, dtype='float32')
-    sd.play(data, samplerate)
-    sd.wait()
+    _play_audio(data, samplerate)
 
 
 def _speak_voicevox(text: str) -> None:
@@ -109,7 +119,6 @@ def _get_kokoro_pipeline():
 
 def _speak_kokoro(text: str) -> None:
     import numpy as np
-    import sounddevice as sd
 
     pipeline = _get_kokoro_pipeline()
     if pipeline is None:
@@ -123,8 +132,7 @@ def _speak_kokoro(text: str) -> None:
         if not audio_chunks:
             return
         combined = np.concatenate(audio_chunks)
-        sd.play(combined, samplerate=24000)
-        sd.wait()
+        _play_audio(combined, 24000)
     except Exception as e:
         logger.warning('[TTS] Kokoro speak error: %s', e)
 
@@ -151,12 +159,47 @@ def speak(text: str, language: str) -> None:
 _speech_queue = queue.Queue(maxsize=1)
 _worker_thread = None
 _worker_lock = threading.Lock()
+_speech_lock = threading.Lock()
+_generation = 0
+_context = threading.local()
+
+
+def _speech_is_current():
+    generation = getattr(_context, 'generation', None)
+    expires_at = getattr(_context, 'expires_at', None)
+    return ((generation is None or generation == _generation)
+            and (expires_at is None or time.monotonic() < expires_at))
+
+
+def cancel_speech() -> None:
+    """Discard queued/synthesizing speech and stop current playback."""
+    global _generation
+    with _speech_lock:
+        _generation += 1
+        while True:
+            try:
+                _speech_queue.get_nowait()
+            except queue.Empty:
+                break
+        sd = sys.modules.get('sounddevice')
+        if sd is not None:
+            try:
+                sd.stop()
+            except Exception as e:
+                logger.warning('[TTS] Audio stop failed: %s', e)
 
 
 def _worker_loop() -> None:
     while True:
-        language, text = _speech_queue.get()
-        speak(text, language)
+        generation, expires_at, language, text = _speech_queue.get()
+        _context.generation = generation
+        _context.expires_at = expires_at
+        try:
+            if _speech_is_current():
+                speak(text, language)
+        finally:
+            _context.generation = None
+            _context.expires_at = None
 
 
 def _ensure_worker_started() -> None:
@@ -167,7 +210,7 @@ def _ensure_worker_started() -> None:
             _worker_thread.start()
 
 
-def speak_async(text: str, language: str) -> None:
+def speak_async(text: str, language: str, *, expires_at=None) -> None:
     """Non-blocking version of `speak()`.
 
     Queues *text* for the background worker thread and returns immediately.
@@ -178,14 +221,13 @@ def speak_async(text: str, language: str) -> None:
     if not text or not text.strip():
         return
     _ensure_worker_started()
-    try:
-        _speech_queue.put_nowait((language, text))
-    except queue.Full:
+    with _speech_lock:
+        item = (_generation, expires_at, language, text)
         try:
-            _speech_queue.get_nowait()
-        except queue.Empty:
-            pass
-        try:
-            _speech_queue.put_nowait((language, text))
+            _speech_queue.put_nowait(item)
         except queue.Full:
-            pass
+            try:
+                _speech_queue.get_nowait()
+            except queue.Empty:
+                pass
+            _speech_queue.put_nowait(item)

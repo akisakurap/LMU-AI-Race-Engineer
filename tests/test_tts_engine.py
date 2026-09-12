@@ -13,6 +13,7 @@ from unittest.mock import MagicMock, patch
 import requests
 
 from tts_engine import _speak_voicevox, speak, speak_async
+import tts_engine
 
 
 def test_speak_empty_text_is_noop():
@@ -120,3 +121,28 @@ def test_speak_async_drops_stale_message_when_backlogged():
         release.set()
 
     assert seen == ['A', 'C']
+
+
+def test_cancel_during_synthesis_prevents_playback_and_clears_queue():
+    entered, release, finished = threading.Event(), threading.Event(), threading.Event()
+    audio = MagicMock()
+
+    def synthesize(text):
+        entered.set()
+        release.wait(2)
+        tts_engine._play_audio([0.0], 24000)
+        finished.set()
+
+    with patch.dict('sys.modules', {'sounddevice': audio}), \
+         patch('tts_engine._speak_voicevox', side_effect=synthesize):
+        speak_async('first', 'ja')
+        try:
+            assert entered.wait(2)
+            speak_async('queued', 'ja')
+            tts_engine.cancel_speech()
+        finally:
+            release.set()
+            assert finished.wait(2)
+        assert tts_engine._speech_queue.empty()
+        audio.play.assert_not_called()
+        audio.stop.assert_called_once()

@@ -9,6 +9,9 @@ drive the same logic from a desktop window instead of the terminal.
 """
 
 import argparse
+import math
+import queue
+import sys
 import time
 from datetime import datetime
 
@@ -31,6 +34,15 @@ INTERVAL_SEC = 10
 LLM_TIMEOUT  = 30
 LM_STUDIO_URL = 'http://localhost:1234/v1'
 ENABLE_TTS   = True
+MAX_DATA_AGE_SEC = 20.0
+
+
+def positive_seconds(value) -> float:
+    """Shared CLI/GUI validation; NaN and infinity are not durations."""
+    number = float(value)
+    if not math.isfinite(number) or number <= 0:
+        raise ValueError('must be a finite positive number')
+    return number
 
 # ============================================================
 # System prompts
@@ -82,20 +94,20 @@ def _tyre_str(data: dict, key: str, labels=('FL', 'FR', 'RL', 'RR')) -> str:
     return ' / '.join(f'{l} {v}' for l, v in zip(labels, vals))
 
 
-def _session_name(session_id: int) -> str:
+def _session_name(session_id: int, language: str = 'ja') -> str:
     if 10 <= session_id <= 13:
-        return 'レース'
+        return 'レース' if language == 'ja' else 'Race'
     if 5 <= session_id <= 8:
-        return '予選'
+        return '予選' if language == 'ja' else 'Qualifying'
     if 1 <= session_id <= 4:
-        return '練習'
-    return 'テスト'
+        return '練習' if language == 'ja' else 'Practice'
+    return 'テスト' if language == 'ja' else 'Test'
 
 
 def build_prompt(data: dict, language: str) -> str:
     g = lambda key, default='N/A': _g(data, key, default)
 
-    session_label = _session_name(int(float(g('Session', '0'))))
+    session_label = _session_name(int(float(g('Session', '0'))), language)
 
     time_rem = data.get('TimeRemaining')
     laps_rem = data.get('LapsRemaining')
@@ -104,7 +116,8 @@ def build_prompt(data: dict, language: str) -> str:
         m, s = divmod(int(time_rem), 60)
         remaining_str += f'{m}:{s:02d}'
     if laps_rem is not None:
-        remaining_str += f' / 残り{laps_rem}周'
+        remaining_str += (f' / 残り{laps_rem}周' if language == 'ja'
+                          else f' / {laps_rem} laps')
     if not remaining_str:
         remaining_str = 'N/A'
 
@@ -155,6 +168,21 @@ def build_prompt(data: dict, language: str) -> str:
             f"Pit stops: {g('NumPitstops')} | Penalties: {g('NumPenalties')} | Blue flag: {g('BlueFlag')}",
         ]
 
+    lines.append(
+        f"Race control: YellowFlag: {g('YellowFlag')} | "
+        f"SectorFlags: {g('SectorFlags')} | GamePhase: {g('GamePhase')} | "
+        f"InPits: {g('InPits')} | PitState: {g('PitState')}"
+    )
+    if 'FuelPerLap' in data:
+        lines.append(
+            f"Fuel estimate (recent complete laps, approximate): {g('FuelPerLap')} L/lap | "
+            f"{g('FuelLapsEstimate')} laps of fuel remaining"
+        )
+    if 'TrendWindowSec' in data:
+        lines.append(
+            f"Change over {g('TrendWindowSec')}s: gap to front {g('GapToFrontChange')}s "
+            f"(negative = closing) | tyre temperature change {_tyre_str(data, 'TyreTempChange')} C"
+        )
     return '\n'.join(lines)
 
 
@@ -167,17 +195,20 @@ def format_gap_line(data: dict) -> str:
 
 
 def call_engineer(user_prompt: str) -> str:
-    client = OpenAI(base_url=LM_STUDIO_URL, api_key='lm-studio')
-    response = client.chat.completions.create(
-        model=MODEL_NAME,
-        messages=[
-            {'role': 'system', 'content': SYSTEM_PROMPTS[PERSONA][LANGUAGE]},
-            {'role': 'user',   'content': user_prompt},
-        ],
-        temperature=0.7,
-        max_tokens=1500,
-        timeout=LLM_TIMEOUT,
-    )
+    with OpenAI(base_url=LM_STUDIO_URL, api_key='lm-studio', max_retries=0) as client:
+        response = client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=[
+                {'role': 'system', 'content': SYSTEM_PROMPTS[PERSONA][LANGUAGE] +
+                 ' Prioritize flags, race phase and pit state. Do not invent missing values '
+                 'or decode unknown state codes by guessing. Fuel estimates are approximate, '
+                 'not guarantees. Give at most two short sentences; avoid repeating routine advice.'},
+                {'role': 'user', 'content': user_prompt},
+            ],
+            temperature=0.7,
+            max_tokens=1500,
+            timeout=LLM_TIMEOUT,
+        )
     if not response.choices:
         return ''
     content = response.choices[0].message.content
@@ -196,12 +227,18 @@ def run_one_cycle(reader: RF2Reader) -> dict:
     `reason` is one of: 'no_data', 'connection', 'timeout', 'empty', 'error',
     or None when `ok` is True.
     """
-    data = reader.read_snapshot()
+    captured_at = time.monotonic()
+    try:
+        data = reader.read_snapshot()
+        if data:
+            captured_at = data.get('CapturedAt', captured_at)
+            prompt = build_prompt(data, LANGUAGE)
+    except Exception as e:
+        return {'ok': False, 'data': None, 'message': None,
+                'error': str(e), 'reason': 'error'}
     if not data:
         return {'ok': False, 'data': None, 'message': None,
                 'error': None, 'reason': 'no_data'}
-
-    prompt = build_prompt(data, LANGUAGE)
 
     try:
         answer = call_engineer(prompt)
@@ -218,16 +255,23 @@ def run_one_cycle(reader: RF2Reader) -> dict:
         return {'ok': False, 'data': data, 'message': None,
                 'error': str(e), 'reason': 'error'}
 
+    expires_at = captured_at + MAX_DATA_AGE_SEC
+    if time.monotonic() >= expires_at:
+        return {'ok': False, 'data': data, 'message': None,
+                'error': 'Telemetry expired — discarded late reply', 'reason': 'stale'}
+
     if not answer:
         return {'ok': False, 'data': data, 'message': None,
                 'error': 'LLM returned empty response', 'reason': 'empty'}
 
     return {'ok': True, 'data': data, 'message': answer,
-            'error': None, 'reason': None}
+            'error': None, 'reason': None, 'expires_at': expires_at}
 
 
 def engineer_loop():
-    reader = RF2Reader()
+    from engineer_worker import EngineerWorker
+    results = queue.Queue()
+    worker = EngineerWorker(results, engine_api=sys.modules[__name__])
 
     print('=' * 60)
     print('  Race Engineer — LMU + rF2 SharedMemory + LM Studio')
@@ -236,34 +280,35 @@ def engineer_loop():
     print('  Press Ctrl+C to stop.')
     print('=' * 60)
 
-    while True:
-        time.sleep(INTERVAL_SEC)
-
-        result = run_one_cycle(reader)
-
-        if result['reason'] == 'no_data':
-            print('[INFO] LMU not running or not in session — waiting...')
-            continue
-
-        data = result['data']
-        ts   = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-
-        print('=' * 60)
-        print(f"[{ts}] Lap {data.get('TotalLaps')} | {data.get('SpeedKmh')} km/h | "
-              f"Fuel: {data.get('Fuel')}L | P{data.get('Position')}/{data.get('NumVehicles')}")
-        print(format_gap_line(data))
-        print('-' * 60)
-
-        if result['ok']:
-            print(f"[ENGINEER] {result['message']}")
-            if ENABLE_TTS:
-                # Non-blocking: playback runs on a background thread so
-                # this cycle doesn't stall waiting for speech to finish.
-                speak_async(result['message'], LANGUAGE)
-        else:
-            print(f"[WARNING] {result['error']}")
-
-        print('=' * 60)
+    worker.start(enable_tts=ENABLE_TTS)
+    try:
+        while True:
+            try:
+                result = results.get(timeout=0.25)
+            except queue.Empty:
+                continue
+            if result['kind'] == 'stopped':
+                break
+            if result['kind'] != 'cycle':
+                continue
+            if result['reason'] == 'no_data':
+                print('[INFO] LMU not running or not in session — waiting...')
+                continue
+            data = result['data']
+            ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            print('=' * 60)
+            if data is not None:
+                print(f"[{ts}] Lap {data.get('TotalLaps')} | {data.get('SpeedKmh')} km/h | "
+                      f"Fuel: {data.get('Fuel')}L | P{data.get('Position')}/{data.get('NumVehicles')}")
+                print(format_gap_line(data))
+                print('-' * 60)
+            if result['ok']:
+                print(f"[ENGINEER] {result['message']}")
+            else:
+                print(f"[WARNING] {result['error']}")
+            print('=' * 60)
+    finally:
+        worker.stop()
 
 
 def parse_args(argv=None) -> argparse.Namespace:
@@ -276,14 +321,16 @@ def parse_args(argv=None) -> argparse.Namespace:
                          help=f"AI persona (default: {PERSONA})")
     parser.add_argument('--model', default=MODEL_NAME,
                          help=f"Model name exactly as loaded in LM Studio (default: {MODEL_NAME})")
-    parser.add_argument('--interval', type=float, default=INTERVAL_SEC,
+    parser.add_argument('--interval', type=positive_seconds, default=INTERVAL_SEC,
                          help=f"Seconds between LLM calls (default: {INTERVAL_SEC})")
-    parser.add_argument('--timeout', type=float, default=LLM_TIMEOUT,
+    parser.add_argument('--timeout', type=positive_seconds, default=LLM_TIMEOUT,
                          help=f"LLM call timeout in seconds (default: {LLM_TIMEOUT})")
     parser.add_argument('--lm-studio-url', default=LM_STUDIO_URL,
                          help=f"LM Studio base URL (default: {LM_STUDIO_URL})")
     parser.add_argument('--no-tts', action='store_true',
                          help='Disable local TTS voice playback (text output only)')
+    parser.add_argument('--max-data-age', type=positive_seconds, default=MAX_DATA_AGE_SEC,
+                         help='Discard radio replies older than this many seconds (default: 20)')
     return parser.parse_args(argv)
 
 
@@ -296,6 +343,7 @@ if __name__ == '__main__':
     LLM_TIMEOUT   = args.timeout
     LM_STUDIO_URL = args.lm_studio_url
     ENABLE_TTS    = not args.no_tts
+    MAX_DATA_AGE_SEC = args.max_data_age
 
     try:
         engineer_loop()
